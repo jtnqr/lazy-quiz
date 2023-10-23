@@ -44,9 +44,11 @@ try:
         # print(driver.get_cookies())
         # Create a QuizScraper instance
         qz = QuizScraper(driver, url, username, password)
-
+        qz_title = qz.get_title()
+        qz_quizzes = qz.get_quizzes()
         # Store quizzes as JSON
-        # data.store_dictionary_as_json(qz.get_quizzes(), qz.get_title(), "quiz")
+        # data.process_dictionary(qz_quizzes)
+        data.store_dictionary_as_json(qz_title, qz_quizzes, "quiz")
 
         # Get the cookies from the WebDriver
         # cookies = driver.get_cookies()
@@ -57,5 +59,5 @@ try:
 
 
 except Exception as e:
-    # Handle exceptions gracefully (e.g., log the error)
+    # Handle exceptions gracefully
     print(f"An error occurred: {str(e)}")

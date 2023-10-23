@@ -134,6 +134,9 @@ class QuizScraper:
                 self.__quizzes[i] = self.__fetch_quiz(i)
         return self.__quizzes
 
+    def __answer_quiz(self, question, answer):
+        pass
+
     def get_title(self):
         """
         Get the title of the quiz.
