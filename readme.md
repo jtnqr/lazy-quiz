@@ -1,7 +1,5 @@
 # Lazy-Quiz
 
-The project contains a Python script that utilizes Selenium to scrape quizzes from a specified URL. The `QuizScraper` class enables users to fetch quiz titles, URLs, and questions along with their corresponding answer choices from the targeted web page. It also provides functionality to answer quizzes automatically. The script is designed to handle the login process, extract quiz data, and store it in an organized dictionary format.
-
 ## Table of Contents
 
 - [Description](#description)
@@ -12,7 +10,7 @@ The project contains a Python script that utilizes Selenium to scrape quizzes fr
 
 ## Description
 
-A brief description of the project goes here.
+The project contains a Python script that utilizes Selenium to scrape quizzes from a specified URL. The `QuizScraper` class enables users to fetch quiz titles, URLs, and questions along with their corresponding answer choices from the targeted web page. It also provides functionality to answer quizzes automatically. The script is designed to handle the login process, extract quiz data, and store it in an organized dictionary format.
 
 ## Installation
 
