@@ -1,7 +1,5 @@
-from numpy import empty
 from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.common.by import By
-from sympy import true
 
 
 class QuizScraper:
@@ -52,7 +50,8 @@ class QuizScraper:
         self.__logged_in = True
 
     def __check_login_state(self):
-        self.driver.get("https://v-class.gunadarma.ac.id/login/")
+        if self.driver.current_url != "https://v-class.gunadarma.ac.id/login/":
+            self.driver.get("https://v-class.gunadarma.ac.id/login/")
 
         try:
             self.driver.find_element(By.ID, "loginbtn")
@@ -87,8 +86,12 @@ class QuizScraper:
         Returns:
             str: The title of the quiz as a string.
         """
-        title_element = self.driver.find_element(By.XPATH, "//a[@title='Quiz']")
-        return title_element.text
+        try:
+            title_element = self.driver.find_element(By.XPATH, "//a[@title='Quiz']")
+            return title_element.text
+        except NoSuchElementException:
+            # If the title element is not found, return a default value or handle the error appropriately
+            return "Title not found"
 
     def __fetch_quiz(self, question_number):
         """
@@ -100,20 +103,26 @@ class QuizScraper:
         Returns:
             dict: A dictionary representing the question and its answers.
         """
-        current_question_number = int(
-            self.driver.find_element(By.CSS_SELECTOR, ".info .no .qno").text
-        )
+        try:
+            current_question_number = int(
+                self.driver.find_element(By.CSS_SELECTOR, ".info .no .qno").text
+            )
 
-        if current_question_number != question_number:
-            self.driver.get(self.__quiz_addresses[question_number - 1])
+            if current_question_number != question_number:
+                self.driver.get(self.__quiz_addresses[question_number - 1])
 
-        question_text = self.driver.find_element(By.XPATH, "//div[@class='qtext']").text
-        answer_choices = self.driver.find_elements(
-            By.XPATH, "//div[@class='answer']//label"
-        )
-        answers = [answer_choice.text for answer_choice in answer_choices]
+            question_text = self.driver.find_element(
+                By.XPATH, "//div[@class='qtext']"
+            ).text
+            answer_choices = self.driver.find_elements(
+                By.XPATH, "//div[@class='answer']//label"
+            )
+            answers = [answer_choice.text for answer_choice in answer_choices]
 
-        return {f"{current_question_number}. {question_text}": answers}
+            return {f"{current_question_number}. {question_text}": answers}
+        except NoSuchElementException:
+            # If any element is not found, return a default value or handle the error appropriately
+            return {"Error": "Quiz not found"}
 
     def __fetch_all_quizzes(self, num_quizzes=None):
         """
