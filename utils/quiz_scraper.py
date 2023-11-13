@@ -119,7 +119,7 @@ class QuizScraper:
             )
             answers = [answer_choice.text for answer_choice in answer_choices]
 
-            return {f"{current_question_number}. {question_text}": answers}
+            return {f"{question_number}. {question_text}": answers}
         except NoSuchElementException:
             # If any element is not found, return a default value or handle the error appropriately
             return {"Error": "Quiz not found"}

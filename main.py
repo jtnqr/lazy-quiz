@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -60,4 +61,9 @@ try:
 
 except Exception as e:
     # Handle exceptions gracefully
-    print(f"An error occurred: {str(e)}")
+    exc_type, exc_obj, exc_tb = sys.exc_info()
+    fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+    print(f"Exception type: {exc_type}")
+    print(f"File name where exception occurred: {fname}")
+    print(f"Line number where exception occurred: {exc_tb.tb_lineno}")
+    print(f"Exception message: {str(e)}")

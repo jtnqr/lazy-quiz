@@ -47,7 +47,7 @@ def process_dictionary(dictionary, print_output=True):
         return result
 
 
-def store_dictionary_as_json(dictionary, title, directory):
+def store_dictionary_as_json(title, dictionary, directory):
     """
     Stores the dictionary as a JSON file with a unique filename.
 
