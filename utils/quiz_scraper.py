@@ -143,8 +143,52 @@ class QuizScraper:
                 self.__quizzes[i] = self.__fetch_quiz(i)
         return self.__quizzes
 
-    def __answer_quiz(self, question, answer):
-        pass
+    def __answer_quiz(self, question_number, answer):
+        """
+        Answers a quiz question with the specified answer.
+
+        Args:
+            question_number (int): The question number to answer.
+            answer (str): The answer to select. Can be an answer choice or a literal answer.
+
+        Returns:
+            bool: True if the answer was successfully selected, False otherwise.
+        """
+        try:
+            # Find the question element
+            quiz_address = self.__quiz_addresses[question_number - 1]
+            self.driver.get(quiz_address)
+
+            # Find the answer element and click it
+            answer_element = None
+            try:
+                # Try to find the answer choice element
+                answer_element = self.driver.find_element(
+                    By.XPATH, f"//*[text()='{answer}']"
+                )
+            except NoSuchElementException:
+                # If answer choice element not found, try to find the literal answer element
+                answer_element = self.driver.find_element(
+                    By.XPATH, f"//*[contains(text(), '{answer}')]"
+                )
+
+            answer_element.click()
+            return True
+        except NoSuchElementException:
+            # If any element is not found, return False or handle the error appropriately
+            return False
+
+    def answer_quizzes(self, answers):
+        """
+        Answers all the quizzes with the specified answers.
+
+        Args:
+            answers (dict): A dictionary containing the question numbers and their corresponding answers.
+                The keys are the question numbers (int) and the values are the answers (str).
+                The answers can be either answer choices or literal answers.
+        """
+        for question_number, answer in answers.items():
+            self.__answer_quiz(question_number, answer)
 
     def get_title(self):
         """
