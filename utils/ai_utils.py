@@ -1,7 +1,7 @@
 import google.generativeai as genai
 import time
 
-def get_gemini_answers(quizzes: dict, api_key: str):
+def get_gemini_answers(quizzes: dict, api_key: str, model_name: str):
     """
     Uses the Gemini API to generate answers for a dictionary of quizzes.
 
@@ -13,7 +13,7 @@ def get_gemini_answers(quizzes: dict, api_key: str):
         dict: A dictionary of {question_number: answer_text} suitable for the QuizScraper.
     """
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel(model_name) 
 
     ai_answers = {}
     print("--- Contacting Gemini API for answers ---")
