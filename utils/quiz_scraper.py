@@ -1,218 +1,219 @@
-from selenium.common.exceptions import NoSuchElementException
+# utils/quiz_scraper.py
+
+import re
+from typing import Dict, List, Optional
+from bs4 import BeautifulSoup
+from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
+from selenium.common.exceptions import NoSuchElementException
+
+# --- Konstanta untuk Pemeliharaan yang Mudah ---
+# Jika Moodle mengubah selector atau URL, Anda hanya perlu mengubahnya di satu tempat.
+_BASE_URL = "https://v-class.gunadarma.ac.id"
+_LOGIN_URL = f"{_BASE_URL}/login/"
+
+_QUIZ_TITLE_SELECTOR_H1 = "h1"
+_QUIZ_NAV_BUTTONS_SELECTOR = ".qn_buttons .qnbutton"
+_QUESTION_TEXT_SELECTOR = ".qtext"
+_ANSWER_BLOCK_SELECTOR = ".answer > div"
+_ANSWER_INPUT_XPATH = ".//input"
+_FINISH_ATTEMPT_LINK_SELECTOR = ".endtestlink"
+
+
+def _clean_html_for_prompt(html: Optional[str]) -> str:
+    """
+    Membersihkan string HTML menjadi teks biasa yang mudah dibaca oleh AI,
+    termasuk mengambil teks alternatif (alt text) dari gambar.
+    """
+    if not html:
+        return ""
+
+    soup = BeautifulSoup(html, "html.parser")
+    text_parts = []
+
+    # Ambil semua teks dan gambar secara berurutan
+    for element in soup.find_all(["img", re.compile(".*")]):
+        if element.name == "img":
+            alt_text = element.get("alt", "").strip()
+            if alt_text:
+                text_parts.append(f"[Gambar dengan deskripsi: {alt_text}]")
+            else:
+                # Fallback jika tidak ada alt text, gunakan nama file gambar
+                src = element.get("src", "").split("/")[-1]
+                text_parts.append(f"[Gambar: {src}]")
+        elif element.string and element.string.strip():
+            text_parts.append(element.string.strip())
+
+    full_text = " ".join(text_parts)
+    return re.sub(r"\s+", " ", full_text).strip()
 
 
 class QuizScraper:
-    def __init__(self, driver, url, username, password):
-        self.driver = driver
-        self.__quizzes = {}
-        self.__quiz_addresses = []
-        self.__title = None
+    """
+    Sebuah kelas untuk mengotomatiskan interaksi dengan kuis Moodle.
+    Bertanggung jawab untuk login, scraping pertanyaan, dan mengisi jawaban.
+    """
 
-        self.__logged_in = self.__check_login_state()
+    def __init__(self, driver: WebDriver, url: str, username: str, password: str):
+        """
+        Inisialisasi scraper.
 
-        if self.__logged_in != True:
+        Args:
+            driver (WebDriver): Instance Selenium WebDriver yang akan digunakan.
+            url (str): URL awal (bisa halaman login atau halaman kuis).
+            username (str): Nama pengguna untuk login.
+            password (str): Kata sandi untuk login.
+        """
+        self.driver: WebDriver = driver
+        self.__quizzes: Dict[int, Dict[str, List[str]]] = {}
+        self.__quiz_addresses: List[str] = []
+        self.__title: Optional[str] = None
+
+        print("Mengecek status login...")
+        if not self.__is_logged_in():
+            print("Belum login. Melakukan proses login...")
             self.__perform_login(username, password)
 
+        print(f"Menavigasi ke URL kuis: {url}")
         self.driver.get(url)
 
-        # Fetch title, quiz addresses, and quizzes
         self.__title = self.__fetch_quiz_title()
         self.__quiz_addresses = self.__fetch_quiz_addresses()
-        self.__quizzes = self.__fetch_all_quizzes()
 
-    def __perform_login(self, username, password):
-        """
-        Perform the login using provided credentials.
+    def __is_logged_in(self) -> bool:
+        """Memeriksa apakah sesi pengguna saat ini sudah login."""
+        # Cara sederhana: URL setelah login biasanya mengandung '/my/'
+        return "/my/" in self.driver.current_url
 
-        Args:
-            username (str): The username for login.
-            password (str): The password for login.
-        """
-
-        if self.driver.current_url not in "https://v-class.gunadarma.ac.id/login/":
-            self.driver.get("https://v-class.gunadarma.ac.id/login/")
-
+    def __perform_login(self, username: str, password: str):
+        """Melakukan login ke Moodle menggunakan kredensial yang diberikan."""
+        if _LOGIN_URL not in self.driver.current_url:
+            self.driver.get(_LOGIN_URL)
         try:
-            login_button = self.driver.find_element(By.ID, "loginbtn")
-            username_field = self.driver.find_element(By.ID, "username")
-            password_field = self.driver.find_element(By.ID, "password")
-            username_field.send_keys(username)
-            password_field.send_keys(password)
-            login_button.click()
-
+            self.driver.find_element(By.ID, "username").send_keys(username)
+            self.driver.find_element(By.ID, "password").send_keys(password)
+            self.driver.find_element(By.ID, "loginbtn").click()
+            print("Login berhasil.")
         except NoSuchElementException:
-            cancel_button = self.driver.find_element(
-                By.CSS_SELECTOR, "button[type='submit'][contains(text(), 'Cancel')]"
+            print(
+                "Gagal menemukan elemen login. Mungkin sudah login atau halaman berubah."
             )
-            cancel_button.click()
 
-        self.__logged_in = True
-
-    def __check_login_state(self):
-        if self.driver.current_url != "https://v-class.gunadarma.ac.id/login/":
-            self.driver.get("https://v-class.gunadarma.ac.id/login/")
-
+    def __fetch_quiz_title(self) -> str:
+        """Mengambil judul kuis dari halaman."""
         try:
-            self.driver.find_element(By.ID, "loginbtn")
-            self.driver.find_element(By.ID, "username")
-            self.driver.find_element(By.ID, "password")
-
-            return False
+            return self.driver.find_element(By.TAG_NAME, _QUIZ_TITLE_SELECTOR_H1).text
         except NoSuchElementException:
-            cancel_button = self.driver.find_element(
-                By.CSS_SELECTOR, "button[type='submit'][contains(text(), 'Cancel')]"
-            )
-            cancel_button.click()
+            return "Judul_Kuis_Tidak_Ditemukan"
 
-            return True
-
-    def __fetch_quiz_addresses(self):
-        """
-        Extracts the URLs of the quizzes from the navigation buttons.
-
-        Returns:
-            list: A list of URLs of the quizzes.
-        """
-        nav_buttons = self.driver.find_elements(
-            By.CSS_SELECTOR, ".qn_buttons .qnbutton"
+    def __fetch_quiz_addresses(self) -> List[str]:
+        """Mengambil semua URL untuk setiap halaman pertanyaan kuis."""
+        elements = self.driver.find_elements(
+            By.CSS_SELECTOR, _QUIZ_NAV_BUTTONS_SELECTOR
         )
-        return [button.get_attribute("href") for button in nav_buttons]
+        return [el.get_attribute("href") for el in elements if el.get_attribute("href")]
 
-    def __fetch_quiz_title(self):
+    def fetch_all_quizzes(self) -> Dict[int, Dict[str, List[str]]]:
         """
-        Fetches the title of a quiz from a web page using a WebDriver.
+        Mengambil semua pertanyaan dan pilihan jawaban dari setiap halaman kuis.
+        Ini adalah metode publik utama untuk memulai proses scraping.
 
         Returns:
-            str: The title of the quiz as a string.
+            Dict: Kamus berisi semua data kuis yang telah di-scrape.
         """
-        try:
-            title_element = self.driver.find_element(By.XPATH, "//a[@title='Quiz']")
-            return title_element.text
-        except NoSuchElementException:
-            # If the title element is not found, return a default value or handle the error appropriately
-            return "Title not found"
+        if not self.__quiz_addresses:
+            print("Peringatan: Tidak ada tombol navigasi kuis yang ditemukan.")
+            return {}
 
-    def __fetch_quiz(self, question_number):
-        """
-        Fetches a single quiz with the specified question number.
-
-        Args:
-            question_number (int): The question number of the quiz to fetch.
-
-        Returns:
-            dict: A dictionary representing the question and its answers.
-        """
-        try:
-            current_question_number = int(
-                self.driver.find_element(By.CSS_SELECTOR, ".info .no .qno").text
-            )
-
-            if current_question_number != question_number:
-                self.driver.get(self.__quiz_addresses[question_number - 1])
-
-            question_text = self.driver.find_element(
-                By.XPATH, "//div[@class='qtext']"
-            ).text
-            answer_choices = self.driver.find_elements(
-                By.XPATH, "//div[@class='answer']//label"
-            )
-            answers = [answer_choice.text for answer_choice in answer_choices]
-
-            return {f"{question_number}. {question_text}": answers}
-        except NoSuchElementException:
-            # If any element is not found, return a default value or handle the error appropriately
-            return {"Error": "Quiz not found"}
-
-    def __fetch_all_quizzes(self, num_quizzes=None):
-        """
-        Fetches all the quizzes and stores them in a dictionary.
-
-        Args:
-            num_quizzes (int, optional): The number of quizzes to fetch. Defaults to None (fetch all quizzes).
-
-        Returns:
-            dict: A dictionary containing all the quizzes.
-        """
-        if num_quizzes is None:
-            num_quizzes = len(self.__quiz_addresses)
-
-        self.__quizzes = {}
-        for i in range(1, num_quizzes + 1):
-            if i not in self.__quizzes or not self.__quizzes[i]:
-                self.__quizzes[i] = self.__fetch_quiz(i)
+        print(f"Menemukan {len(self.__quiz_addresses)} pertanyaan. Memulai scraping...")
+        for i in range(len(self.__quiz_addresses)):
+            question_number = i + 1
+            print(f"  - Scraping pertanyaan {question_number}...")
+            self.__quizzes[question_number] = self.__fetch_single_quiz(question_number)
         return self.__quizzes
 
-    def __answer_quiz(self, question_number, answer):
-        """
-        Answers a quiz question with the specified answer.
-
-        Args:
-            question_number (int): The question number to answer.
-            answer (str): The answer to select. Can be an answer choice or a literal answer.
-
-        Returns:
-            bool: True if the answer was successfully selected, False otherwise.
-        """
+    def __fetch_single_quiz(self, question_number: int) -> Dict[str, List[str]]:
+        """Mengambil teks pertanyaan dan pilihan jawaban untuk satu nomor."""
         try:
-            # Find the question element
-            quiz_address = self.__quiz_addresses[question_number - 1]
-            self.driver.get(quiz_address)
+            target_url = self.__quiz_addresses[question_number - 1]
+            # --- Peningkatan Efisiensi: Hanya navigasi jika URL berbeda ---
+            if self.driver.current_url != target_url:
+                self.driver.get(target_url)
 
-            # Find the answer element and click it
-            answer_element = None
-            try:
-                # Try to find the answer choice element
-                answer_element = self.driver.find_element(
-                    By.XPATH, f"//*[text()='{answer}']"
-                )
-            except NoSuchElementException:
-                # If answer choice element not found, try to find the literal answer element
-                answer_element = self.driver.find_element(
-                    By.XPATH, f"//*[contains(text(), '{answer}')]"
-                )
+            q_html = self.driver.find_element(
+                By.CSS_SELECTOR, _QUESTION_TEXT_SELECTOR
+            ).get_attribute("innerHTML")
+            q_text = _clean_html_for_prompt(q_html)
 
-            answer_element.click()
-            return True
-        except NoSuchElementException:
-            # If any element is not found, return False or handle the error appropriately
-            return False
+            answer_elements = self.driver.find_elements(
+                By.CSS_SELECTOR, _ANSWER_BLOCK_SELECTOR
+            )
+            answers = [
+                _clean_html_for_prompt(el.get_attribute("innerHTML"))
+                for el in answer_elements
+            ]
 
-    def answer_quizzes(self, answers):
+            return {q_text: [ans for ans in answers if ans]}
+        except (NoSuchElementException, IndexError):
+            return {"Error": f"Gagal memuat konten untuk pertanyaan {question_number}."}
+
+    def answer_quizzes(self, answers: Dict[str, str]):
         """
-        Answers all the quizzes with the specified answers.
+        Mengisi semua jawaban di halaman web berdasarkan kamus jawaban.
 
         Args:
-            answers (dict): A dictionary containing the question numbers and their corresponding answers.
-                The keys are the question numbers (int) and the values are the answers (str).
-                The answers can be either answer choices or literal answers.
+            answers (Dict[str, str]): Kamus dengan nomor pertanyaan (string) sebagai kunci dan teks jawaban sebagai nilai.
         """
-        for question_number, answer in answers.items():
-            self.__answer_quiz(question_number, answer)
+        print("Memulai proses pengisian jawaban di halaman web...")
+        for q_num_str, answer_text in answers.items():
+            question_number = int(q_num_str)
+            print(f"  - Mengisi jawaban untuk pertanyaan {question_number}...")
+            self.__answer_single_quiz(question_number, answer_text)
 
-    def get_title(self):
-        """
-        Get the title of the quiz.
+        try:
+            # Setelah semua jawaban terisi, klik link untuk ke halaman rangkuman.
+            self.driver.find_element(
+                By.CSS_SELECTOR, _FINISH_ATTEMPT_LINK_SELECTOR
+            ).click()
+            print("\nSemua jawaban telah dipilih.")
+            print(
+                "PENTING: Harap periksa kembali jawaban Anda di halaman rangkuman dan klik 'Submit all and finish' secara manual."
+            )
+        except NoSuchElementException:
+            print(
+                "\nTidak dapat menemukan link 'Finish attempt'. Harap navigasi manual."
+            )
 
-        Returns:
-            str: The title of the quiz as a string.
-        """
-        return self.__title
+    def __answer_single_quiz(self, question_number: int, answer_text: str):
+        """Memilih satu jawaban untuk satu nomor pertanyaan."""
+        try:
+            target_url = self.__quiz_addresses[question_number - 1]
+            if self.driver.current_url != target_url:
+                self.driver.get(target_url)
 
-    def get_quiz_addresses(self):
-        """
-        Get the quiz addresses.
+            # XPath ini lebih kuat karena mencari input (radio/checkbox) yang berasosiasi dengan teks jawaban.
+            xpath_expression = f"//div[contains(@class, 'answer')]//div[contains(., \"{answer_text}\")]"
+            answer_element_container = self.driver.find_element(
+                By.XPATH, xpath_expression
+            )
 
-        Returns:
-            list: A list of URLs of the quizzes.
-        """
-        return self.__quiz_addresses
+            # Klik pada input di dalam elemen jawaban
+            input_to_click = answer_element_container.find_element(
+                By.XPATH, _ANSWER_INPUT_XPATH
+            )
+            self.driver.execute_script("arguments[0].click();", input_to_click)
 
-    def get_quizzes(self):
-        """
-        Get the quizzes as a dictionary.
+        except (NoSuchElementException, IndexError):
+            print(
+                f"  - Peringatan: Tidak dapat menemukan pilihan jawaban '{answer_text}' untuk pertanyaan {question_number}."
+            )
 
-        Returns:
-            dict: A dictionary containing all the quizzes.
+    def get_sanitized_title(self) -> str:
         """
-        return self.__quizzes
+        Mengembalikan judul kuis yang sudah dibersihkan untuk digunakan sebagai nama file/folder.
+        """
+        if not self.__title:
+            return "Tanpa_Judul"
+
+        sanitized = re.sub(r'[\\/*?:"<>|]', "", self.__title)
+        return re.sub(r"\s+", "_", sanitized)

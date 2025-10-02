@@ -1,31 +1,30 @@
 import google.generativeai as genai
 import time
+from google.api_core import exceptions
+
 
 def get_gemini_answers(quizzes: dict, api_key: str, model_name: str):
     """
     Uses the Gemini API to generate answers for a dictionary of quizzes.
-
-    Args:
-        quizzes (dict): The dictionary of scraped quizzes.
-        api_key (str): Your Gemini API key.
-
-    Returns:
-        dict: A dictionary of {question_number: answer_text} suitable for the QuizScraper.
+    Includes retry logic to handle API rate limiting and model not found errors.
     """
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(model_name) 
+    try:
+        model = genai.GenerativeModel(model_name)
+    except exceptions.NotFound:
+        print(
+            f"Gemini API Error: Model '{model_name}' not found. Please check the model name in your .env file."
+        )
+        return {}  # Return empty dict to stop the process
 
     ai_answers = {}
-    print("--- Contacting Gemini API for answers ---")
+    print(f"--- Contacting Gemini API using model '{model_name}' for answers ---")
 
-    # The quiz dictionary is structured as: {1: {"Question Text 1": ["Opt A", "Opt B"]}, 2: ...}
     for num, question_data in quizzes.items():
-        # Unpack the question text and answer options from the inner dictionary
         question_text, options = list(question_data.items())[0]
-        
-        # --- This is the Prompt Engineering part ---
-        # We give the AI clear instructions to ensure it returns the answer
-        # in a format we can easily parse.
+
+        formatted_options = "\n- ".join(options)
+
         prompt = f"""
         You are an expert answering a multiple-choice quiz.
         Based on the following question and options, please return only the exact text of the most likely correct answer.
@@ -34,34 +33,84 @@ def get_gemini_answers(quizzes: dict, api_key: str, model_name: str):
         Question: "{question_text}"
 
         Options:
-        - {"\n- ".join(options)}
+        - {formatted_options}
 
         Correct Answer Text:
         """
 
-        try:
-            print(f"Asking Gemini about Question {num}...")
-            response = model.generate_content(prompt)
-            
-            # The response.text will contain the AI's chosen answer
-            chosen_answer = response.text.strip()
-            
-            # Basic validation to see if the AI's answer is one of the options
-            if chosen_answer in options:
-                print(f"  > Gemini chose: '{chosen_answer}'")
-                ai_answers[num] = chosen_answer
-            else:
-                # If Gemini returns something unexpected, we can log it and maybe default to the first option
-                print(f"  > Warning: Gemini returned an answer ('{chosen_answer}') not in the provided options. Defaulting to the first option.")
-                ai_answers[num] = options[0] if options else ""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                print(f"Asking Gemini about Question {num} (Attempt {attempt + 1})...")
+                response = model.generate_content(prompt)
 
-            # Be a good citizen and don't spam the API too quickly
-            time.sleep(1) 
+                chosen_answer = response.text.strip()
 
-        except Exception as e:
-            print(f"An error occurred while calling the Gemini API for question {num}: {e}")
-            # If the API fails, we can skip this question or provide a default
+                if chosen_answer in options:
+                    print(f"  > Gemini chose: '{chosen_answer}'")
+                    ai_answers[num] = chosen_answer
+                else:
+                    print(
+                        f"  > Warning: Gemini returned an answer ('{chosen_answer}') not in the options. Defaulting to first option."
+                    )
+                    ai_answers[num] = options[0] if options else ""
+
+                time.sleep(1)  # Be a good citizen
+                break
+
+            except exceptions.ResourceExhausted:
+                wait_time = 30
+                print(
+                    f"  > Rate limit hit. Pausing for {wait_time} seconds before retrying..."
+                )
+                time.sleep(wait_time)
+
+            except Exception as e:
+                print(f"  > An unexpected API error occurred: {e}")
+                ai_answers[num] = ""
+                break
+        else:
+            print(
+                f"  > Failed to get an answer for question {num} after {max_retries} attempts."
+            )
             ai_answers[num] = ""
 
     print("--- Finished getting answers from Gemini ---")
     return ai_answers
+
+
+def test_gemini_api(api_key: str, model_name: str) -> bool:
+    """
+    Performs a simple API call to check if the Gemini API key and model are valid.
+    """
+    print("\n--- Testing Gemini API Connection ---")
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content(
+            "This is a test. Respond with the single word: OK"
+        )
+
+        if "OK" in response.text:
+            print("Gemini API Check: SUCCESS - Received a valid response.")
+            return True
+        else:
+            print(
+                "Gemini API Check: WARNING - Connection worked, but received an unexpected response."
+            )
+            return True
+
+    except exceptions.PermissionDenied:
+        print(
+            "Gemini API Check: FAILED - Permission Denied. Your API key is likely invalid or has been revoked."
+        )
+        return False
+    # --- THIS IS THE CORRECTED LINE ---
+    except exceptions.NotFound:
+        print(
+            f"Gemini API Check: FAILED - Model '{model_name}' not found. Check the model name in your .env file."
+        )
+        return False
+    except Exception as e:
+        print(f"Gemini API Check: FAILED - An unexpected error occurred: {e}")
+        return False
