@@ -92,7 +92,7 @@ def main():
 
         with webdriver.Chrome(options=options) as driver:
             qz = QuizScraper(driver, args.url, username, password)
-            qz_title = qz.get_title()
+            qz_title = qz.get_sanitized_title()
 
             run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             output_dir = os.path.join("output", f"{qz_title}_{run_timestamp}")
