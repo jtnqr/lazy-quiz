@@ -1,88 +1,94 @@
+# utils/ai_utils.py (Final A++ Version with Batching)
+
+import re
 import google.generativeai as genai
 import time
+import json
 from google.api_core import exceptions
+
+
+def _format_batch_prompt(quizzes: dict) -> str:
+    """Membangun satu prompt besar yang berisi semua pertanyaan untuk pemrosesan batch."""
+    prompt = (
+        "Anda adalah seorang ahli yang sangat akurat dalam menjawab kuis pilihan ganda. "
+        "Di bawah ini ada beberapa pertanyaan. Analisis setiap pertanyaan dan pilihan jawabannya, "
+        "lalu kembalikan satu objek JSON yang valid.\n\n"
+        'Struktur JSON harus berupa: { "nomor_soal": "teks_jawaban_lengkap" }.\n'
+        'Contoh: { "1": "b. Pilihan Jawaban Benar", "2": "c. Pilihan Lainnya" }.\n'
+        "Pastikan teks jawaban yang Anda kembalikan sama persis dengan salah satu pilihan yang diberikan.\n\n"
+        "Berikut adalah pertanyaannya:\n"
+        "-------------------------------------\n"
+    )
+
+    for number, data in quizzes.items():
+        question_text, options = list(data.items())[0]
+        prompt += f"\nSoal Nomor: {number}\n"
+        prompt += f"Pertanyaan: {question_text}\n"
+        prompt += "Pilihan:\n"
+        for opt in options:
+            prompt += f"- {opt}\n"
+        prompt += "-------------------------------------\n"
+
+    prompt += "\nHarap kembalikan hanya objek JSON sebagai respons Anda."
+    return prompt
 
 
 def get_gemini_answers(quizzes: dict, api_key: str, model_name: str):
     """
-    Uses the Gemini API to generate answers for a dictionary of quizzes.
-    Includes retry logic to handle API rate limiting and model not found errors.
+    Menggunakan Gemini API untuk menjawab semua kuis dalam satu panggilan batch.
     """
     genai.configure(api_key=api_key)
     try:
         model = genai.GenerativeModel(model_name)
     except exceptions.NotFound:
         print(
-            f"Gemini API Error: Model '{model_name}' not found. Please check the model name in your .env file."
+            f"Gemini API Error: Model '{model_name}' tidak ditemukan. Periksa nama model di file .env Anda."
         )
-        return {}  # Return empty dict to stop the process
+        return {}
 
+    print("--- Menghubungi Gemini API untuk semua jawaban (Mode Batch) ---")
+
+    # Konsep Penanganan Limit Token (untuk masa depan):
+    # Model modern seperti gemini-1.5-flash memiliki limit token yang sangat besar (1 juta),
+    # sehingga satu kuis hampir pasti muat dalam satu batch. Jika diperlukan untuk model
+    # yang lebih lama, kita bisa memecah `quizzes` menjadi beberapa 'chunk' dan memanggil
+    # API untuk setiap chunk. Untuk saat ini, satu batch sudah cukup.
+
+    batch_prompt = _format_batch_prompt(quizzes)
     ai_answers = {}
-    print(f"--- Contacting Gemini API using model '{model_name}' for answers ---")
 
-    for num, question_data in quizzes.items():
-        question_text, options = list(question_data.items())[0]
+    try:
+        print("Mengirim semua pertanyaan dalam satu permintaan...")
+        response = model.generate_content(batch_prompt)
 
-        formatted_options = "\n- ".join(options)
-
-        prompt = f"""
-        You are an expert answering a multiple-choice quiz.
-        Based on the following question and options, please return only the exact text of the most likely correct answer.
-        Do not add any explanation, punctuation, or any other text. Just return the answer string.
-
-        Question: "{question_text}"
-
-        Options:
-        - {formatted_options}
-
-        Correct Answer Text:
-        """
-
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                print(f"Asking Gemini about Question {num} (Attempt {attempt + 1})...")
-                response = model.generate_content(prompt)
-
-                chosen_answer = response.text.strip()
-
-                if chosen_answer in options:
-                    print(f"  > Gemini chose: '{chosen_answer}'")
-                    ai_answers[num] = chosen_answer
-                else:
-                    print(
-                        f"  > Warning: Gemini returned an answer ('{chosen_answer}') not in the options. Defaulting to first option."
-                    )
-                    ai_answers[num] = options[0] if options else ""
-
-                time.sleep(1)  # Be a good citizen
-                break
-
-            except exceptions.ResourceExhausted:
-                wait_time = 30
-                print(
-                    f"  > Rate limit hit. Pausing for {wait_time} seconds before retrying..."
-                )
-                time.sleep(wait_time)
-
-            except Exception as e:
-                print(f"  > An unexpected API error occurred: {e}")
-                ai_answers[num] = ""
-                break
+        # Ekstrak blok JSON dari respons AI, yang terkadang menyertakan ```json ... ```
+        json_text = re.search(r"```json\s*([\s\S]+?)\s*```", response.text)
+        if json_text:
+            cleaned_text = json_text.group(1)
         else:
-            print(
-                f"  > Failed to get an answer for question {num} after {max_retries} attempts."
-            )
-            ai_answers[num] = ""
+            cleaned_text = response.text
 
-    print("--- Finished getting answers from Gemini ---")
+        # Parsing respons JSON
+        ai_answers = json.loads(cleaned_text)
+        print("Berhasil menerima dan mem-parsing semua jawaban dari Gemini.")
+
+    except json.JSONDecodeError:
+        print(
+            "  > Peringatan: Gagal mem-parsing respons JSON dari Gemini. AI mungkin tidak mengembalikan format yang benar."
+        )
+        print(f"  > Respons Mentah: {response.text}")
+        # Sebagai fallback, kita bisa mencoba menjawab satu per satu, tapi untuk sekarang kita biarkan kosong.
+        return {}
+    except Exception as e:
+        print(f"  > Terjadi error tak terduga saat memanggil API: {e}")
+        return {}
+
+    print("--- Selesai mendapatkan jawaban dari Gemini ---")
     return ai_answers
 
 
 def test_gemini_api(api_key: str, model_name: str) -> bool:
-    """
-    Performs a simple API call to check if the Gemini API key and model are valid.
-    """
+    # ... (fungsi ini tidak perlu diubah)
     print("\n--- Testing Gemini API Connection ---")
     try:
         genai.configure(api_key=api_key)
@@ -105,7 +111,6 @@ def test_gemini_api(api_key: str, model_name: str) -> bool:
             "Gemini API Check: FAILED - Permission Denied. Your API key is likely invalid or has been revoked."
         )
         return False
-    # --- THIS IS THE CORRECTED LINE ---
     except exceptions.NotFound:
         print(
             f"Gemini API Check: FAILED - Model '{model_name}' not found. Check the model name in your .env file."
