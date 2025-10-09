@@ -1,7 +1,5 @@
 # utils/quiz_scraper.py
 
-import json
-import os
 import re
 from typing import Dict, List, Optional
 
@@ -14,7 +12,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 _BASE_URL = "https://v-class.gunadarma.ac.id"
 _LOGIN_URL = f"{_BASE_URL}/login/index.php"
-_SESSION_FILE = "session.json"
+_DASHBOARD_ELEMENT_SELECTOR = ".action-menu"
 
 _QUIZ_TITLE_SELECTOR_H1 = "h1"
 _QUIZ_NAV_BUTTONS_SELECTOR = ".qn_buttons .qnbutton"
@@ -24,7 +22,7 @@ _FINISH_ATTEMPT_LINK_SELECTOR = ".endtestlink"
 _NEXT_PAGE_BUTTON_SELECTOR = ".mod_quiz-next-nav"
 _ATTEMPT_QUIZ_BUTTON_XPATH = "//button[contains(text(), 'Attempt quiz now')]"
 _START_ATTEMPT_CONFIRM_BUTTON_ID = "id_submitbutton"
-_WAIT_TIMEOUT_SECONDS = 10
+_WAIT_TIMEOUT_SECONDS = 15
 
 
 def _clean_html_for_prompt(html: Optional[str]) -> str:
@@ -42,15 +40,10 @@ class QuizScraper:
         self.__quiz_addresses: List[str] = []
         self.__title: Optional[str] = None
 
-        print("Mencoba memuat sesi dari file...")
-        if not self.__load_session_and_verify():
-            print("Sesi tidak ditemukan atau tidak valid. Melakukan login manual...")
-            self.__perform_login_robustly(username, password)
-            self.__save_session()
-        else:
-            print("Berhasil melanjutkan sesi dari file.")
+        print("Memulai proses login...")
+        self.__perform_login(username, password)
 
-        print(f"Menavigasi ke URL kuis: {url}")
+        print(f"Login berhasil. Menavigasi ke URL kuis: {url}")
         self.driver.get(url)
 
         self.__start_quiz_if_needed()
@@ -63,36 +56,7 @@ class QuizScraper:
         self.__title = self.__fetch_quiz_title()
         self.__quiz_addresses = self.__fetch_quiz_addresses()
 
-    def __load_session_and_verify(self) -> bool:
-        if not os.path.exists(_SESSION_FILE):
-            return False
-        try:
-            with open(_SESSION_FILE, "r") as f:
-                cookies = json.load(f)
-            self.driver.get(_BASE_URL)
-            for cookie in cookies:
-                self.driver.add_cookie(cookie)
-            self.driver.get(_BASE_URL + "/my/")
-            self.wait.until(
-                lambda d: d.execute_script("return document.readyState") == "complete"
-            )
-            return self.__is_logged_in()
-        except Exception:
-            return False
-
-    def __save_session(self):
-        try:
-            cookies = self.driver.get_cookies()
-            with open(_SESSION_FILE, "w") as f:
-                json.dump(cookies, f)
-            print(f"Sesi berhasil disimpan ke '{_SESSION_FILE}'.")
-        except Exception as e:
-            print(f"Gagal menyimpan sesi: {e}")
-
-    def __is_logged_in(self) -> bool:
-        return "/my/" in self.driver.current_url
-
-    def __perform_login_robustly(self, username: str, password: str):
+    def __perform_login(self, username: str, password: str):
         try:
             self.driver.get(_LOGIN_URL)
 
@@ -100,20 +64,16 @@ class QuizScraper:
                 EC.visibility_of_element_located((By.ID, "username"))
             )
             password_field = self.driver.find_element(By.ID, "password")
-            login_button = self.driver.find_element(By.ID, "loginbtn")
 
             username_field.send_keys(username)
             password_field.send_keys(password)
-            login_button.click()
+            self.driver.find_element(By.ID, "loginbtn").click()
 
-            self.wait.until(EC.staleness_of(login_button))
-
-            if not self.__is_logged_in():
-                raise Exception(
-                    "Login gagal. Halaman tidak beralih ke dasbor setelah submit."
+            self.wait.until(
+                EC.visibility_of_element_located(
+                    (By.CSS_SELECTOR, _DASHBOARD_ELEMENT_SELECTOR)
                 )
-
-            print("Login manual berhasil.")
+            )
         except (TimeoutException, Exception) as e:
             print(
                 "Gagal melakukan login. Periksa kredensial Anda atau koneksi jaringan."

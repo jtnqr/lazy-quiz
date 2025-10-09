@@ -24,19 +24,20 @@ def handle_dry_run(username, password, binary_location, gemini_api_key, gemini_m
         if binary_location:
             options.binary_location = binary_location
         with webdriver.Chrome(options=options) as driver:
-            QuizScraper(driver, "https://v-class.gunadarma.ac.id/", username, password)
+            scraper = QuizScraper(
+                driver, "https://v-class.gunadarma.ac.id/my/", username, password
+            )  # Navigasi ke dasbor untuk tes
         print("Moodle Login Check: SUCCESS")
     except Exception as e:
         print("Moodle Login Check: FAILED")
-        print(
-            "  > Details: Check SELENIUM_USERNAME and SELENIUM_PASSWORD in the .env file."
-        )
         print(f"  > Error Message: {e}")
+
     if gemini_api_key:
         ai.test_gemini_api(gemini_api_key, gemini_model)
     else:
         print("\n--- Testing Gemini API Connection ---")
         print("Skipped: GEMINI_API_KEY not found in .env file.")
+
     print("\n--- Dry Run Complete ---")
     print("To run the full script, provide a URL with the --url flag.")
 
