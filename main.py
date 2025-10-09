@@ -83,7 +83,6 @@ def main():
             options.binary_location = binary_location
 
         with webdriver.Chrome(options=options) as driver:
-            # --- PENINGKATAN KETANGGUHAN: Menangkap error validasi URL ---
             try:
                 qz = QuizScraper(driver, args.url, username, password)
             except ValueError as e:

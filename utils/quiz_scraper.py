@@ -10,7 +10,6 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-# --- Konstanta untuk Pemeliharaan yang Mudah ---
 _BASE_URL = "https://v-class.gunadarma.ac.id"
 _LOGIN_URL = f"{_BASE_URL}/login/"
 _QUIZ_TITLE_SELECTOR_H1 = "h1"
@@ -20,7 +19,8 @@ _ANSWER_BLOCK_SELECTOR = ".answer > div"
 _FINISH_ATTEMPT_LINK_SELECTOR = ".endtestlink"
 _NEXT_PAGE_BUTTON_SELECTOR = ".mod_quiz-next-nav"
 _ATTEMPT_QUIZ_BUTTON_XPATH = "//button[contains(text(), 'Attempt quiz now')]"
-_WAIT_TIMEOUT_SECONDS = 10  # Waktu tunggu maksimal untuk elemen
+_START_ATTEMPT_CONFIRM_BUTTON_ID = "id_submitbutton"
+_WAIT_TIMEOUT_SECONDS = 10
 
 
 def _clean_html_for_prompt(html: Optional[str]) -> str:
@@ -46,10 +46,8 @@ class QuizScraper:
         print(f"Menavigasi ke URL kuis: {url}")
         self.driver.get(url)
 
-        # --- FITUR BARU: Mulai Kuis Otomatis ---
         self.__start_quiz_if_needed()
 
-        # --- PENINGKATAN KETANGGUHAN: Validasi Halaman Kuis ---
         if not self.__is_valid_quiz_page():
             raise ValueError(
                 "URL yang diberikan tampaknya bukan halaman kuis yang valid. Tidak dapat menemukan navigasi kuis."
@@ -77,27 +75,36 @@ class QuizScraper:
             )
 
     def __start_quiz_if_needed(self):
-        """Memeriksa keberadaan tombol 'Attempt quiz now' dan mengkliknya jika ada."""
+        """
+        Memeriksa dan menangani proses awal kuis, termasuk popup konfirmasi.
+        """
         try:
             attempt_button = self.driver.find_element(
                 By.XPATH, _ATTEMPT_QUIZ_BUTTON_XPATH
             )
-            print("Tombol 'Attempt quiz now' ditemukan. Memulai percobaan kuis...")
+            print("Tombol 'Attempt quiz now' ditemukan. Mengklik...")
             attempt_button.click()
-            # Tunggu hingga halaman kuis yang sebenarnya (dengan navigasi) dimuat
+
+            print("Menunggu popup konfirmasi...")
+            confirm_button = self.wait.until(
+                EC.element_to_be_clickable((By.ID, _START_ATTEMPT_CONFIRM_BUTTON_ID))
+            )
+            print("Popup ditemukan. Mengklik tombol konfirmasi 'Start attempt'...")
+            confirm_button.click()
+
             self.wait.until(
                 EC.presence_of_element_located(
                     (By.CSS_SELECTOR, _QUIZ_NAV_BUTTONS_SELECTOR)
                 )
             )
             print("Percobaan kuis berhasil dimulai.")
-        except NoSuchElementException:
-            # Jika tombol tidak ada, berarti kita sudah di dalam percobaan kuis.
-            print("Sudah berada di dalam percobaan kuis. Melanjutkan...")
+        except (NoSuchElementException, TimeoutException):
+            print(
+                "Sudah berada di dalam percobaan kuis atau tombol tidak ditemukan. Melanjutkan..."
+            )
             pass
 
     def __is_valid_quiz_page(self) -> bool:
-        """Memvalidasi apakah halaman saat ini adalah halaman kuis yang aktif."""
         try:
             self.driver.find_element(By.CSS_SELECTOR, _QUIZ_NAV_BUTTONS_SELECTOR)
             return True

@@ -1,9 +1,9 @@
-# utils/ai_utils.py (Final A++ Version with Batching)
+# utils/ai_utils.py
 
-import re
-import google.generativeai as genai
-import time
 import json
+import re
+
+import google.generativeai as genai
 from google.api_core import exceptions
 
 
@@ -61,14 +61,12 @@ def get_gemini_answers(quizzes: dict, api_key: str, model_name: str):
         print("Mengirim semua pertanyaan dalam satu permintaan...")
         response = model.generate_content(batch_prompt)
 
-        # Ekstrak blok JSON dari respons AI, yang terkadang menyertakan ```json ... ```
         json_text = re.search(r"```json\s*([\s\S]+?)\s*```", response.text)
         if json_text:
             cleaned_text = json_text.group(1)
         else:
             cleaned_text = response.text
 
-        # Parsing respons JSON
         ai_answers = json.loads(cleaned_text)
         print("Berhasil menerima dan mem-parsing semua jawaban dari Gemini.")
 
@@ -77,7 +75,6 @@ def get_gemini_answers(quizzes: dict, api_key: str, model_name: str):
             "  > Peringatan: Gagal mem-parsing respons JSON dari Gemini. AI mungkin tidak mengembalikan format yang benar."
         )
         print(f"  > Respons Mentah: {response.text}")
-        # Sebagai fallback, kita bisa mencoba menjawab satu per satu, tapi untuk sekarang kita biarkan kosong.
         return {}
     except Exception as e:
         print(f"  > Terjadi error tak terduga saat memanggil API: {e}")
@@ -88,7 +85,6 @@ def get_gemini_answers(quizzes: dict, api_key: str, model_name: str):
 
 
 def test_gemini_api(api_key: str, model_name: str) -> bool:
-    # ... (fungsi ini tidak perlu diubah)
     print("\n--- Testing Gemini API Connection ---")
     try:
         genai.configure(api_key=api_key)
