@@ -1,22 +1,21 @@
+# main.py
+
+import argparse
+import json
 import os
 import sys
-import json
-import argparse
 from datetime import datetime
+
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from utils.quiz_scraper import QuizScraper
+
 import utils.ai_utils as ai
+from utils.quiz_scraper import QuizScraper
 
 
 def handle_dry_run(username, password, binary_location, gemini_api_key, gemini_model):
-    """
-    Executes a dry run to test Moodle login and Gemini API credentials.
-    """
     print("--- Starting Dry Run (Default Mode) ---")
-
-    # 1. Test Moodle Login
     print("\n--- Testing Moodle Login ---")
     try:
         options = Options()
@@ -24,30 +23,25 @@ def handle_dry_run(username, password, binary_location, gemini_api_key, gemini_m
         options.add_experimental_option("excludeSwitches", ["enable-logging"])
         if binary_location:
             options.binary_location = binary_location
-
         with webdriver.Chrome(options=options) as driver:
             QuizScraper(driver, "https://v-class.gunadarma.ac.id/", username, password)
         print("Moodle Login Check: SUCCESS")
     except Exception as e:
         print("Moodle Login Check: FAILED")
         print(
-            f"  > Details: Check SELENIUM_USERNAME and SELENIUM_PASSWORD in the .env file."
+            "  > Details: Check SELENIUM_USERNAME and SELENIUM_PASSWORD in the .env file."
         )
         print(f"  > Error Message: {e}")
-
-    # 2. Test Gemini API
     if gemini_api_key:
         ai.test_gemini_api(gemini_api_key, gemini_model)
     else:
         print("\n--- Testing Gemini API Connection ---")
         print("Skipped: GEMINI_API_KEY not found in .env file.")
-
     print("\n--- Dry Run Complete ---")
     print("To run the full script, provide a URL with the --url flag.")
 
 
 def main():
-    # --- 1. Argument Parsing & Configuration ---
     parser = argparse.ArgumentParser(
         description="A script to scrape and/or answer Moodle quizzes. Runs a dry run by default."
     )
@@ -74,14 +68,12 @@ def main():
         )
         sys.exit(1)
 
-    # --- 2. Decide on Action: Dry Run (Default) or Full Run ---
     if not args.url:
         handle_dry_run(
             username, password, binary_location, gemini_api_key, gemini_model
         )
         sys.exit(0)
 
-    # --- 3. Full Run Logic (only if --url is provided) ---
     print(f"URL provided. Starting full run for: {args.url}")
     try:
         options = Options()
@@ -91,9 +83,14 @@ def main():
             options.binary_location = binary_location
 
         with webdriver.Chrome(options=options) as driver:
-            qz = QuizScraper(driver, args.url, username, password)
-            qz_title = qz.get_sanitized_title()
+            # --- PENINGKATAN KETANGGUHAN: Menangkap error validasi URL ---
+            try:
+                qz = QuizScraper(driver, args.url, username, password)
+            except ValueError as e:
+                print(f"\nError: Inisialisasi scraper gagal. {e}")
+                sys.exit(1)
 
+            qz_title = qz.get_sanitized_title()
             run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             output_dir = os.path.join("output", f"{qz_title}_{run_timestamp}")
             os.makedirs(output_dir, exist_ok=True)
@@ -114,11 +111,16 @@ def main():
                 ai_generated_answers = ai.get_gemini_answers(
                     qz_quizzes, gemini_api_key, gemini_model
                 )
-                ai_answers_path = os.path.join(output_dir, "ai_answers.json")
-                with open(ai_answers_path, "w") as f:
-                    json.dump(ai_generated_answers, f, indent=2)
-                print(f"AI-generated answers saved to: '{ai_answers_path}'")
-                qz.answer_quizzes(ai_generated_answers)
+                if ai_generated_answers:
+                    ai_answers_path = os.path.join(output_dir, "ai_answers.json")
+                    with open(ai_answers_path, "w") as f:
+                        json.dump(ai_generated_answers, f, indent=2)
+                    print(f"AI-generated answers saved to: '{ai_answers_path}'")
+                    qz.answer_quizzes(ai_generated_answers)
+                else:
+                    print(
+                        "Gagal mendapatkan jawaban dari AI. Proses menjawab dibatalkan."
+                    )
             else:
                 if args.scrape_only:
                     print("\nRunning in --scrape-only mode. Skipping answering phase.")
@@ -130,10 +132,10 @@ def main():
     except Exception:
         exc_type, exc_obj, exc_tb = sys.exc_info()
         fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-        print(f"\n--- AN UNEXPECTED ERROR OCCURRED ---")
+        print("\n--- AN UNEXPECTED ERROR OCCURRED ---")
         print(f"  - Type: {exc_type.__name__}")
         print(f"  - File: {fname} (Line: {exc_tb.tb_lineno})")
-        print(f"  - Message: {exc_obj}")
+        print(f"  - Message: {str(exc_obj)}")
 
 
 if __name__ == "__main__":
