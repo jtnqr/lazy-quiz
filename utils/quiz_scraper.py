@@ -3,7 +3,6 @@
 import json
 import os
 import re
-import time
 from typing import Dict, List, Optional
 
 from bs4 import BeautifulSoup
@@ -14,7 +13,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 _BASE_URL = "https://v-class.gunadarma.ac.id"
-_LOGIN_URL = f"{_BASE_URL}/login/"
+_LOGIN_URL = f"{_BASE_URL}/login/index.php"
 _SESSION_FILE = "session.json"
 
 _QUIZ_TITLE_SELECTOR_H1 = "h1"
@@ -46,7 +45,7 @@ class QuizScraper:
         print("Mencoba memuat sesi dari file...")
         if not self.__load_session_and_verify():
             print("Sesi tidak ditemukan atau tidak valid. Melakukan login manual...")
-            self.__perform_login(username, password)
+            self.__perform_login_robustly(username, password)
             self.__save_session()
         else:
             print("Berhasil melanjutkan sesi dari file.")
@@ -67,21 +66,18 @@ class QuizScraper:
     def __load_session_and_verify(self) -> bool:
         if not os.path.exists(_SESSION_FILE):
             return False
-
         try:
             with open(_SESSION_FILE, "r") as f:
                 cookies = json.load(f)
-
-            self.driver.get(_BASE_URL + "/my/")
-
+            self.driver.get(_BASE_URL)
             for cookie in cookies:
                 self.driver.add_cookie(cookie)
-
-            self.driver.refresh()
-            time.sleep(2)
+            self.driver.get(_BASE_URL + "/my/")
+            self.wait.until(
+                lambda d: d.execute_script("return document.readyState") == "complete"
+            )
             return self.__is_logged_in()
-        except Exception as e:
-            print(f"Gagal memuat sesi: {e}. File sesi mungkin rusak.")
+        except Exception:
             return False
 
     def __save_session(self):
@@ -96,27 +92,42 @@ class QuizScraper:
     def __is_logged_in(self) -> bool:
         return "/my/" in self.driver.current_url
 
-    def __perform_login(self, username: str, password: str):
-        if _LOGIN_URL not in self.driver.current_url:
-            self.driver.get(_LOGIN_URL)
+    def __perform_login_robustly(self, username: str, password: str):
         try:
-            self.wait.until(
-                EC.presence_of_element_located((By.ID, "username"))
-            ).send_keys(username)
-            self.driver.find_element(By.ID, "password").send_keys(password)
-            self.driver.find_element(By.ID, "loginbtn").click()
-            self.wait.until(lambda driver: self.__is_logged_in())
-            print("Login manual berhasil.")
-        except (NoSuchElementException, TimeoutException):
-            print(
-                "Gagal menemukan elemen login atau login gagal. Periksa kredensial Anda."
+            self.driver.get(_LOGIN_URL)
+
+            username_field = self.wait.until(
+                EC.visibility_of_element_located((By.ID, "username"))
             )
-            raise
+            password_field = self.driver.find_element(By.ID, "password")
+            login_button = self.driver.find_element(By.ID, "loginbtn")
+
+            username_field.send_keys(username)
+            password_field.send_keys(password)
+            login_button.click()
+
+            self.wait.until(EC.staleness_of(login_button))
+
+            if not self.__is_logged_in():
+                raise Exception(
+                    "Login gagal. Halaman tidak beralih ke dasbor setelah submit."
+                )
+
+            print("Login manual berhasil.")
+        except (TimeoutException, Exception) as e:
+            print(
+                "Gagal melakukan login. Periksa kredensial Anda atau koneksi jaringan."
+            )
+            self.driver.save_screenshot("login_failure_screenshot.png")
+            print(
+                "Screenshot halaman kegagalan disimpan sebagai 'login_failure_screenshot.png'"
+            )
+            raise e
 
     def __start_quiz_if_needed(self):
         try:
-            attempt_button = self.driver.find_element(
-                By.XPATH, _ATTEMPT_QUIZ_BUTTON_XPATH
+            attempt_button = self.wait.until(
+                EC.presence_of_element_located((By.XPATH, _ATTEMPT_QUIZ_BUTTON_XPATH))
             )
             print("Tombol 'Attempt quiz now' ditemukan. Mengklik...")
             attempt_button.click()
