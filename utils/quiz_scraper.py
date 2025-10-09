@@ -1,6 +1,9 @@
 # utils/quiz_scraper.py
 
+import json
+import os
 import re
+import time
 from typing import Dict, List, Optional
 
 from bs4 import BeautifulSoup
@@ -12,6 +15,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 _BASE_URL = "https://v-class.gunadarma.ac.id"
 _LOGIN_URL = f"{_BASE_URL}/login/"
+_SESSION_FILE = "session.json"
+
 _QUIZ_TITLE_SELECTOR_H1 = "h1"
 _QUIZ_NAV_BUTTONS_SELECTOR = ".qn_buttons .qnbutton"
 _QUESTION_TEXT_SELECTOR = ".qtext"
@@ -38,10 +43,13 @@ class QuizScraper:
         self.__quiz_addresses: List[str] = []
         self.__title: Optional[str] = None
 
-        print("Mengecek status login...")
-        if not self.__is_logged_in():
-            print("Belum login. Melakukan proses login...")
+        print("Mencoba memuat sesi dari file...")
+        if not self.__load_session_and_verify():
+            print("Sesi tidak ditemukan atau tidak valid. Melakukan login manual...")
             self.__perform_login(username, password)
+            self.__save_session()
+        else:
+            print("Berhasil melanjutkan sesi dari file.")
 
         print(f"Menavigasi ke URL kuis: {url}")
         self.driver.get(url)
@@ -56,6 +64,35 @@ class QuizScraper:
         self.__title = self.__fetch_quiz_title()
         self.__quiz_addresses = self.__fetch_quiz_addresses()
 
+    def __load_session_and_verify(self) -> bool:
+        if not os.path.exists(_SESSION_FILE):
+            return False
+
+        try:
+            with open(_SESSION_FILE, "r") as f:
+                cookies = json.load(f)
+
+            self.driver.get(_BASE_URL + "/my/")
+
+            for cookie in cookies:
+                self.driver.add_cookie(cookie)
+
+            self.driver.refresh()
+            time.sleep(2)
+            return self.__is_logged_in()
+        except Exception as e:
+            print(f"Gagal memuat sesi: {e}. File sesi mungkin rusak.")
+            return False
+
+    def __save_session(self):
+        try:
+            cookies = self.driver.get_cookies()
+            with open(_SESSION_FILE, "w") as f:
+                json.dump(cookies, f)
+            print(f"Sesi berhasil disimpan ke '{_SESSION_FILE}'.")
+        except Exception as e:
+            print(f"Gagal menyimpan sesi: {e}")
+
     def __is_logged_in(self) -> bool:
         return "/my/" in self.driver.current_url
 
@@ -68,30 +105,27 @@ class QuizScraper:
             ).send_keys(username)
             self.driver.find_element(By.ID, "password").send_keys(password)
             self.driver.find_element(By.ID, "loginbtn").click()
-            print("Login berhasil.")
+            self.wait.until(lambda driver: self.__is_logged_in())
+            print("Login manual berhasil.")
         except (NoSuchElementException, TimeoutException):
             print(
-                "Gagal menemukan elemen login. Mungkin sudah login atau halaman berubah."
+                "Gagal menemukan elemen login atau login gagal. Periksa kredensial Anda."
             )
+            raise
 
     def __start_quiz_if_needed(self):
-        """
-        Memeriksa dan menangani proses awal kuis, termasuk popup konfirmasi.
-        """
         try:
             attempt_button = self.driver.find_element(
                 By.XPATH, _ATTEMPT_QUIZ_BUTTON_XPATH
             )
             print("Tombol 'Attempt quiz now' ditemukan. Mengklik...")
             attempt_button.click()
-
             print("Menunggu popup konfirmasi...")
             confirm_button = self.wait.until(
                 EC.element_to_be_clickable((By.ID, _START_ATTEMPT_CONFIRM_BUTTON_ID))
             )
             print("Popup ditemukan. Mengklik tombol konfirmasi 'Start attempt'...")
             confirm_button.click()
-
             self.wait.until(
                 EC.presence_of_element_located(
                     (By.CSS_SELECTOR, _QUIZ_NAV_BUTTONS_SELECTOR)
@@ -127,14 +161,13 @@ class QuizScraper:
 
     def fetch_all_quizzes(self) -> Dict[int, Dict[str, List[str]]]:
         if not self.__quiz_addresses:
-            print("Peringatan: Tidak ada tombol navigasi kuis yang ditemukan.")
             return {}
         print(f"Menemukan {len(self.__quiz_addresses)} pertanyaan. Memulai scraping...")
         self.driver.get(self.__quiz_addresses[0])
         for i in range(len(self.__quiz_addresses)):
-            question_number = i + 1
-            print(f"  - Scraping pertanyaan {question_number}...")
-            self.__quizzes[question_number] = self.__fetch_current_page_quiz()
+            q_num = i + 1
+            print(f"  - Scraping pertanyaan {q_num}...")
+            self.__quizzes[q_num] = self.__fetch_current_page_quiz()
             if i < len(self.__quiz_addresses) - 1:
                 try:
                     self.wait.until(
@@ -144,7 +177,7 @@ class QuizScraper:
                     ).click()
                 except TimeoutException:
                     print(
-                        f"  - Peringatan: Tidak bisa menemukan tombol 'Next Page' setelah soal {question_number}."
+                        f"  - Peringatan: Tidak bisa menemukan tombol 'Next Page' setelah soal {q_num}."
                     )
                     break
         return self.__quizzes
@@ -176,14 +209,14 @@ class QuizScraper:
             EC.presence_of_element_located((By.CSS_SELECTOR, _QUESTION_TEXT_SELECTOR))
         )
         for i in range(len(self.__quiz_addresses)):
-            question_number = i + 1
-            answer_text = answers.get(str(question_number))
+            q_num = i + 1
+            answer_text = answers.get(str(q_num))
             if answer_text:
-                print(f"  - Mengisi jawaban untuk pertanyaan {question_number}...")
+                print(f"  - Mengisi jawaban untuk pertanyaan {q_num}...")
                 self.__answer_current_page_quiz(answer_text)
             else:
                 print(
-                    f"  - Peringatan: Tidak ada jawaban untuk pertanyaan {question_number}. Melewati..."
+                    f"  - Peringatan: Tidak ada jawaban untuk pertanyaan {q_num}. Melewati..."
                 )
             if i < len(self.__quiz_addresses) - 1:
                 try:
@@ -214,9 +247,9 @@ class QuizScraper:
 
     def __answer_current_page_quiz(self, answer_text: str):
         try:
-            xpath_expression = f"//div[starts-with(@class, 'r') and contains(., \"{answer_text}\")]/input"
+            xpath = f"//div[starts-with(@class, 'r') and contains(., \"{answer_text}\")]/input"
             input_to_click = self.wait.until(
-                EC.presence_of_element_located((By.XPATH, xpath_expression))
+                EC.presence_of_element_located((By.XPATH, xpath))
             )
             self.driver.execute_script("arguments[0].click();", input_to_click)
         except TimeoutException:
