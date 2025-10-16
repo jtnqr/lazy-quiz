@@ -71,3 +71,5 @@ desktop.ini
 # untuk mengabaikannya jika Anda menambahkannya nanti.
 *.log
 logs/
+
+cache/
