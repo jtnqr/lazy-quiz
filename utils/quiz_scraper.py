@@ -14,7 +14,7 @@ _BASE_URL = "https://v-class.gunadarma.ac.id"
 _LOGIN_URL = f"{_BASE_URL}/login/index.php"
 _DASHBOARD_ELEMENT_SELECTOR = ".action-menu"
 
-_QUIZ_TITLE_SELECTOR_H1 = "h1"
+_QUIZ_TITLE_SELECTOR_H1 = "h2"
 _QUIZ_NAV_BUTTONS_SELECTOR = ".qn_buttons .qnbutton"
 _QUESTION_TEXT_SELECTOR = ".qtext"
 _ANSWER_BLOCK_SELECTOR = ".answer > div"
@@ -38,27 +38,33 @@ class QuizScraper:
     def __init__(self, driver: WebDriver, url: str, username: str, password: str):
         self.driver: WebDriver = driver
         self.wait: WebDriverWait = WebDriverWait(self.driver, _WAIT_TIMEOUT_SECONDS)
+        self.quiz_id: Optional[str] = self._extract_id_from_url(url)
         self.__quizzes: Dict[int, Dict[str, Any]] = {}
         self.__quiz_addresses: List[str] = []
         self.__title: Optional[str] = None
 
         print("Memulai proses otentikasi...")
-        self.__perform_login(username, password)
+        self._perform_login(username, password)
 
         print(f"Login berhasil. Menavigasi ke URL kuis: {url}")
         self.driver.get(url)
 
-        self.__start_quiz_if_needed()
+        self.__title = self._fetch_quiz_title()
 
-        if not self.__is_valid_quiz_page():
+        self._start_quiz_if_needed()
+
+        if not self._is_valid_quiz_page():
             raise ValueError(
                 "URL yang diberikan tampaknya bukan halaman kuis yang valid."
             )
 
-        self.__title = self.__fetch_quiz_title()
-        self.__quiz_addresses = self.__fetch_quiz_addresses()
+        self.__quiz_addresses = self._fetch_quiz_addresses()
 
-    def __perform_login(self, username: str, password: str):
+    def _extract_id_from_url(self, url: str) -> Optional[str]:
+        match = re.search(r"[?&](id|cmid)=(\d+)", url)
+        return match.group(2) if match else None
+
+    def _perform_login(self, username: str, password: str):
         try:
             self.driver.get(_LOGIN_URL)
             username_field = self.wait.until(
@@ -78,7 +84,7 @@ class QuizScraper:
             self.driver.save_screenshot("login_failure.png")
             raise e
 
-    def __start_quiz_if_needed(self):
+    def _start_quiz_if_needed(self):
         try:
             action_button = self.wait.until(
                 EC.presence_of_element_located((By.XPATH, _QUIZ_ACTION_BUTTON_XPATH))
@@ -105,14 +111,14 @@ class QuizScraper:
             print("Sudah berada di dalam percobaan kuis. Melanjutkan...")
             pass
 
-    def __is_valid_quiz_page(self) -> bool:
+    def _is_valid_quiz_page(self) -> bool:
         try:
             self.driver.find_element(By.CSS_SELECTOR, _QUIZ_NAV_BUTTONS_SELECTOR)
             return True
         except NoSuchElementException:
             return False
 
-    def __fetch_quiz_title(self) -> str:
+    def _fetch_quiz_title(self) -> str:
         try:
             return self.wait.until(
                 EC.presence_of_element_located((By.TAG_NAME, _QUIZ_TITLE_SELECTOR_H1))
@@ -120,7 +126,7 @@ class QuizScraper:
         except TimeoutException:
             return "Judul_Kuis_Tidak_Ditemukan"
 
-    def __fetch_quiz_addresses(self) -> List[str]:
+    def _fetch_quiz_addresses(self) -> List[str]:
         elements = self.driver.find_elements(
             By.CSS_SELECTOR, _QUIZ_NAV_BUTTONS_SELECTOR
         )
@@ -134,7 +140,7 @@ class QuizScraper:
         for i in range(len(self.__quiz_addresses)):
             q_num = i + 1
             print(f"  - Scraping pertanyaan {q_num}...")
-            self.__quizzes[q_num] = self.__fetch_current_page_quiz()
+            self.__quizzes[q_num] = self._fetch_current_page_quiz()
             if i < len(self.__quiz_addresses) - 1:
                 try:
                     self.wait.until(
@@ -149,7 +155,7 @@ class QuizScraper:
                     break
         return self.__quizzes
 
-    def __fetch_current_page_quiz(self) -> Dict[str, Any]:
+    def _fetch_current_page_quiz(self) -> Dict[str, Any]:
         try:
             q_element = self.wait.until(
                 EC.presence_of_element_located(
@@ -159,7 +165,6 @@ class QuizScraper:
             q_html = q_element.get_attribute("innerHTML")
             q_text = _clean_html_for_prompt(q_html)
             has_image = "<img" in q_html
-
             answer_elements = self.driver.find_elements(
                 By.CSS_SELECTOR, _ANSWER_BLOCK_SELECTOR
             )
@@ -169,7 +174,6 @@ class QuizScraper:
                 if "<img" in ans_html:
                     has_image = True
                 answers.append(_clean_html_for_prompt(ans_html))
-
             return {
                 "question_text": q_text,
                 "answers": [ans for ans in answers if ans],
@@ -189,9 +193,7 @@ class QuizScraper:
             answer_text = answers.get(str(q_num))
             if answer_text:
                 print(f"  - Mengisi jawaban untuk pertanyaan {q_num}...")
-                self.__answer_current_page_quiz(answer_text)
-            # Tidak perlu 'else' di sini, karena pertanyaan bergambar sudah dilewati sebelumnya
-
+                self._answer_current_page_quiz(answer_text)
             if i < len(self.__quiz_addresses) - 1:
                 try:
                     self.wait.until(
@@ -210,14 +212,14 @@ class QuizScraper:
             ).click()
             print("\nSemua jawaban yang memungkinkan telah diisi dan disimpan.")
             print(
-                "PENTING: Harap periksa kembali jawaban Anda (terutama yang dilewati) dan klik 'Submit all and finish' secara manual."
+                "PENTING: Harap periksa kembali jawaban Anda dan klik 'Submit all and finish' secara manual."
             )
         except TimeoutException:
             print(
                 "\nTidak dapat menemukan link 'Finish attempt'. Harap navigasi manual."
             )
 
-    def __answer_current_page_quiz(self, answer_text: str):
+    def _answer_current_page_quiz(self, answer_text: str):
         try:
             xpath = f"//div[starts-with(@class, 'r') and contains(., \"{answer_text}\")]/input"
             input_to_click = self.wait.until(
@@ -233,4 +235,5 @@ class QuizScraper:
         if not self.__title:
             return "Tanpa_Judul"
         sanitized = re.sub(r'[\\/*?:"<>|]', "", self.__title)
+        sanitized = sanitized.replace("(", "").replace(")", "")
         return re.sub(r"\s+", "_", sanitized)

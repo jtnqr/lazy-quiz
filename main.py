@@ -20,7 +20,6 @@ CACHE_DIR = "cache"
 
 def handle_dry_run(username, password, binary_location, gemini_api_key, gemini_model):
     print("--- Starting Dry Run (Default Mode) ---")
-    print("\n--- Testing Moodle Login ---")
     driver = None
     try:
         options = Options()
@@ -104,6 +103,15 @@ def main():
             sys.exit(1)
 
         qz_title = qz.get_sanitized_title()
+        quiz_id = qz.quiz_id
+
+        cache_filename = (
+            f"{qz_title}_{quiz_id}_questions.json"
+            if quiz_id
+            else f"{qz_title}_questions.json"
+        )
+        cache_file = os.path.join(CACHE_DIR, cache_filename)
+
         answers_to_fill = {}
 
         if args.answer_file:
@@ -114,7 +122,6 @@ def main():
                 answers_to_fill[num] = list(data.values())[0]
         else:
             os.makedirs(CACHE_DIR, exist_ok=True)
-            cache_file = os.path.join(CACHE_DIR, f"{qz_title}_questions.json")
             qz_quizzes = None
             if os.path.exists(cache_file) and not args.no_cache:
                 print(f"Cache ditemukan! Memuat pertanyaan dari '{cache_file}'...")
@@ -135,9 +142,9 @@ def main():
             skipped_questions = []
             for num, data in qz_quizzes.items():
                 if data.get("has_image", False):
-                    skipped_questions.append(num)
+                    skipped_questions.append(int(num))
                 else:
-                    questions_for_ai[num] = {
+                    questions_for_ai[int(num)] = {
                         "question_text": data["question_text"],
                         "answers": data["answers"],
                     }
@@ -153,17 +160,25 @@ def main():
                 )
                 if answers_from_ai:
                     run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                    output_dir = os.path.join("output", f"{qz_title}_{run_timestamp}")
+                    output_dir_name = (
+                        f"{qz_title}_{quiz_id}_{run_timestamp}"
+                        if quiz_id
+                        else f"{qz_title}_{run_timestamp}"
+                    )
+                    output_dir = os.path.join("output", output_dir_name)
                     os.makedirs(output_dir, exist_ok=True)
 
                     shareable_answers = {}
                     for num_str, answer_text in answers_from_ai.items():
-                        question_text = questions_for_ai[num_str]["question_text"]
+                        question_text = questions_for_ai[int(num_str)]["question_text"]
                         shareable_answers[num_str] = {question_text: answer_text}
 
-                    shareable_file_path = os.path.join(
-                        output_dir, f"{qz_title}_SHAREABLE_ANSWERS.json"
+                    shareable_filename = (
+                        f"{qz_title}_{quiz_id}_SHAREABLE_ANSWERS.json"
+                        if quiz_id
+                        else f"{qz_title}_SHAREABLE_ANSWERS.json"
                     )
+                    shareable_file_path = os.path.join(output_dir, shareable_filename)
                     with open(shareable_file_path, "w") as f:
                         json.dump(shareable_answers, f, indent=2)
                     print(
@@ -219,7 +234,5 @@ def main():
             driver.quit()
 
 
-if __name__ == "__main__":
-    main()
 if __name__ == "__main__":
     main()
