@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -19,7 +20,8 @@ CACHE_DIR = "cache"
 
 
 def handle_dry_run(username, password, binary_location, gemini_api_key, gemini_model):
-    print("--- Starting Dry Run (Default Mode) ---")
+    print("--- Starting Dry Run ---")
+    print("\n--- Testing Moodle Login ---")
     driver = None
     try:
         options = Options()
@@ -42,49 +44,17 @@ def handle_dry_run(username, password, binary_location, gemini_api_key, gemini_m
         print("\n--- Testing Gemini API Connection ---")
         print("Skipped: GEMINI_API_KEY not found in .env file.")
     print("\n--- Dry Run Complete ---")
-    print("To run the full script, provide a URL with the --url flag.")
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="A script to scrape and/or answer Moodle quizzes."
-    )
-    parser.add_argument("--url", help="URL kuis untuk memulai proses penuh.")
-    parser.add_argument(
-        "--answer-file",
-        help="Path ke file JSON kunci jawaban untuk langsung mengisi kuis.",
-    )
-    parser.add_argument(
-        "--scrape-only",
-        action="store_true",
-        help="Hanya scrape pertanyaan; jangan jawab.",
-    )
-    parser.add_argument(
-        "--no-cache",
-        action="store_true",
-        help="Paksa scrape baru dan abaikan data cache.",
-    )
-    args = parser.parse_args()
-
-    load_dotenv()
-    username = os.environ.get("SELENIUM_USERNAME")
-    password = os.environ.get("SELENIUM_PASSWORD")
-    binary_location = os.environ.get("BROWSER_BINARY_LOCATION")
-    gemini_api_key = os.environ.get("GEMINI_API_KEY")
-    gemini_model = os.environ.get("GEMINI_MODEL", "gemini-pro")
-
-    if not all([username, password]):
-        print("Error: Pastikan SELENIUM_USERNAME dan SELENIUM_PASSWORD ada di .env.")
-        sys.exit(1)
-    if not args.url and not args.answer_file:
-        handle_dry_run(
-            username, password, binary_location, gemini_api_key, gemini_model
-        )
-        sys.exit(0)
-    if not args.url and (args.scrape_only or not args.answer_file):
-        print("Error: Argumen --url diperlukan untuk mode ini.")
-        sys.exit(1)
-
+def run_quiz_process(
+    quiz_url: str,
+    args,
+    username,
+    password,
+    binary_location,
+    gemini_api_key,
+    gemini_model,
+):
     driver = None
     is_successful = False
     try:
@@ -95,7 +65,6 @@ def main():
             options.binary_location = binary_location
         driver = webdriver.Chrome(options=options)
 
-        quiz_url = args.url if args.url else "https://v-class.gunadarma.ac.id/my/"
         try:
             qz = QuizScraper(driver, quiz_url, username, password)
         except ValueError as e:
@@ -192,6 +161,7 @@ def main():
                 is_successful = True
             elif not questions_for_ai:
                 print("\nTidak ada pertanyaan berbasis teks yang bisa dijawab oleh AI.")
+                is_successful = True
             else:
                 print("\nAPI key Gemini tidak ditemukan.")
                 is_successful = True
@@ -221,6 +191,7 @@ def main():
         else:
             if not args.scrape_only:
                 print("Tidak ada jawaban untuk diisi. Proses selesai.")
+                is_successful = True
     except Exception:
         exc_type, exc_obj, exc_tb = sys.exc_info()
         fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
@@ -232,6 +203,85 @@ def main():
         if driver and not is_successful:
             print("Menutup WebDriver karena proses tidak selesai atau terjadi error...")
             driver.quit()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="A script to scrape and/or answer Moodle quizzes."
+    )
+    parser.add_argument(
+        "--url", help="URL kuis untuk menjalankan dalam mode non-interaktif."
+    )
+    parser.add_argument(
+        "--answer-file",
+        help="Path ke file JSON kunci jawaban untuk langsung mengisi kuis.",
+    )
+    parser.add_argument(
+        "--scrape-only",
+        action="store_true",
+        help="Hanya scrape pertanyaan; jangan jawab.",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Paksa scrape baru dan abaikan data cache.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Jalankan tes koneksi dan kredensial, lalu keluar.",
+    )
+    args = parser.parse_args()
+
+    load_dotenv()
+    username = os.environ.get("SELENIUM_USERNAME")
+    password = os.environ.get("SELENIUM_PASSWORD")
+    binary_location = os.environ.get("BROWSER_BINARY_LOCATION")
+    gemini_api_key = os.environ.get("GEMINI_API_KEY")
+    gemini_model = os.environ.get("GEMINI_MODEL", "gemini-pro")
+
+    if not all([username, password]):
+        print("Error: Pastikan SELENIUM_USERNAME dan SELENIUM_PASSWORD ada di .env.")
+        sys.exit(1)
+
+    if args.dry_run:
+        handle_dry_run(
+            username, password, binary_location, gemini_api_key, gemini_model
+        )
+    elif args.url or args.answer_file:
+        quiz_url = args.url if args.url else "https://v-class.gunadarma.ac.id/my/"
+        run_quiz_process(
+            quiz_url,
+            args,
+            username,
+            password,
+            binary_location,
+            gemini_api_key,
+            gemini_model,
+        )
+    else:
+        print("--- Mode Interaktif ---")
+        while True:
+            raw_url = input("Silakan masukkan URL kuis: ")
+            cleaned_url = raw_url.strip()
+            if re.match(
+                r"^https://v-class\.gunadarma\.ac\.id/mod/quiz/view\.php\?id=\d+$",
+                cleaned_url,
+            ):
+                run_quiz_process(
+                    cleaned_url,
+                    args,
+                    username,
+                    password,
+                    binary_location,
+                    gemini_api_key,
+                    gemini_model,
+                )
+                break
+            else:
+                print(
+                    "URL tidak valid. Harap masukkan URL yang benar, contoh: 'https://v-class.gunadarma.ac.id/mod/quiz/view.php?id=...'"
+                )
 
 
 if __name__ == "__main__":

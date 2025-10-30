@@ -32,7 +32,6 @@ def _clean_html_for_prompt(html: Optional[str]) -> str:
         return ""
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text(separator=" ", strip=True)
-    # Hapus label seperti "a. ", "b. ", dll. dari awal string.
     return re.sub(r"^[a-z]\.\s+", "", text).strip()
 
 
