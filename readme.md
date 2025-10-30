@@ -2,13 +2,15 @@
 
 ## Pendahuluan
 
-**Lazy Quiz** adalah sebuah skrip Python yang dirancang untuk mengotomatiskan proses pengerjaan kuis di platform e-learning Moodle. Proyek ini menggunakan Selenium untuk interaksi dengan browser dan dapat diintegrasikan dengan Google Gemini API untuk menjawab pertanyaan secara otomatis berdasarkan konten yang di-scrape.
+**Lazy Quiz** adalah sebuah skrip Python yang dirancang untuk mengotomatiskan proses pengerjaan kuis di platform e-learning Moodle. Proyek ini menggunakan Selenium untuk interaksi dengan browser dan terintegrasi dengan Google Gemini API untuk menjawab pertanyaan berbasis teks secara otomatis.
 
 Proyek ini dibuat sebagai studi kasus untuk eksplorasi dan pembelajaran dalam bidang:
--   Automasi Web dengan Selenium.
--   Web Scraping dengan BeautifulSoup.
--   Integrasi API dengan model AI generatif (Google Gemini).
--   Praktik terbaik dalam pengembangan perangkat lunak (konfigurasi, struktur proyek, penanganan error).
+
+- Automasi Web dengan Selenium.
+- Web Scraping dengan BeautifulSoup.
+- Integrasi API dengan model AI generatif (Google Gemini).
+- Desain Command-Line Interface (CLI) yang ramah pengguna.
+- Praktik terbaik dalam pengembangan perangkat lunak (konfigurasi, struktur proyek, penanganan error).
 
 ---
 
@@ -16,99 +18,109 @@ Proyek ini dibuat sebagai studi kasus untuk eksplorasi dan pembelajaran dalam bi
 
 **PROYEK INI DIBUAT HANYA UNTUK TUJUAN PENDIDIKAN DAN EKSPERIMENTAL.**
 
--   **Jangan Pernah** menggunakan skrip ini untuk mengerjakan ujian, kuis, atau tugas akademik yang sesungguhnya. Melakukan hal tersebut adalah bentuk kecurangan dan pelanggaran serius terhadap **integritas akademik**.
--   Konsekuensi dari kecurangan akademik bisa sangat berat, termasuk kegagalan mata kuliah, skorsing, atau bahkan dikeluarkan dari institusi pendidikan Anda.
--   **Pengguna bertanggung jawab penuh** atas segala tindakan yang dilakukan menggunakan kode ini. Pengembang tidak bertanggung jawab atas penyalahgunaan apa pun.
+- **Jangan Pernah** menggunakan skrip ini untuk mengerjakan ujian, kuis, atau tugas akademik yang sesungguhnya. Melakukan hal tersebut adalah bentuk kecurangan dan pelanggaran serius terhadap **integritas akademik**.
+- Konsekuensi dari kecurangan akademik bisa sangat berat, termasuk kegagalan mata kuliah, skorsing, atau bahkan dikeluarkan dari institusi pendidikan Anda.
+- **Pengguna bertanggung jawab penuh** atas segala tindakan yang dilakukan menggunakan kode ini. Pengembang tidak bertanggung jawab atas penyalahgunaan apa pun.
 
 ---
 
 ## ✨ Fitur
 
--   **Login Otomatis:** Skrip dapat secara otomatis login ke akun Moodle Anda.
--   **Scraping Kuis:** Mampu mengambil semua pertanyaan dan pilihan jawaban dari sebuah kuis, termasuk konten yang mengandung gambar (dengan mengambil teks alternatifnya).
--   **Menjawab dengan AI:** Terintegrasi dengan Google Gemini API untuk menganalisis pertanyaan dan memilih jawaban yang paling relevan.
--   **Mode Scrape-Saja:** Opsi untuk hanya mengambil data kuis dan menyimpannya ke file JSON tanpa mencoba menjawabnya.
--   **Mode Dry Run:** Fitur untuk menguji kredensial login dan koneksi API Key Gemini sebelum menjalankan proses penuh.
--   **Penanganan Rate Limit:** Secara otomatis berhenti sejenak dan mencoba lagi jika batas permintaan API tercapai, cocok untuk kuis dengan banyak soal.
--   **Struktur Output Terorganisir:** Setiap hasil eksekusi disimpan dalam folder unik dengan timestamp untuk kemudahan pelacakan.
+- **Login Otomatis:** Skrip akan melakukan login ke akun Moodle Anda setiap kali dijalankan.
+- **Alur Kuis Otomatis:** Mampu menangani seluruh alur kuis, mulai dari mengklik "Attempt quiz", "Continue last attempt", menangani popup konfirmasi, hingga menavigasi antar soal.
+- **Scraping Cerdas:** Mampu mengambil semua pertanyaan dan pilihan jawaban, serta mendeteksi soal yang berisi gambar untuk dilewati.
+- **Menjawab dengan AI:** Terintegrasi dengan Google Gemini API untuk menganalisis pertanyaan dan memilih jawaban yang paling relevan.
+- **Mode Eksekusi Ganda:**
+  - **Mode Interaktif:** Jalankan skrip tanpa argumen dan Anda akan dipandu untuk memasukkan URL.
+  - **Mode Non-Interaktif:** Gunakan _flags_ seperti `--url` untuk menjalankan skrip sepenuhnya secara otomatis.
+- **Sistem Cache Cerdas:** Secara otomatis menyimpan pertanyaan yang sudah di-scrape ke _cache_. Pada eksekusi berikutnya untuk kuis yang sama, skrip akan melewatkan proses scraping yang lambat.
+- **Fitur Berbagi Jawaban:** Menghasilkan file "kunci jawaban" berformat JSON yang bisa dibagikan ke pengguna lain, memungkinkan mereka mengisi kuis secara otomatis tanpa perlu akses API.
 
 ---
 
 ## ⚙️ Kebutuhan Sistem
 
--   Python 3.8 atau yang lebih baru.
--   Browser Google Chrome.
--   [ChromeDriver](https://googlechromelabs.github.io/chrome-for-testing/) yang versinya **sesuai** dengan versi Google Chrome Anda.
--   API Key dari [Google AI Studio](https://aistudio.google.com/) (gratis untuk penggunaan pengembangan).
+- Python 3.8 atau yang lebih baru.
+- Browser Google Chrome.
+- Dependensi Python yang tercantum di `requirements.txt`.
 
 ---
 
 ## 🚀 Cara Penggunaan
 
 1.  **Clone Repositori**
+
     ```bash
-    git clone https://github.com/username/lazy-quiz.git
+    git clone https://github.com/jtnqr/lazy-quiz.git
     cd lazy-quiz
     ```
 
 2.  **Instal Dependensi**
+
     ```bash
     pip install -r requirements.txt
     ```
 
 3.  **Siapkan File Konfigurasi (`.env`)**
     Salin file `.env.example` menjadi `.env` dan isi dengan kredensial Anda.
+
     ```bash
     # Ganti kredensial berikut dengan milik Anda
-    SELENIUM_USERNAME="NPM_ANDA"
+    SELENIUM_USERNAME="USERNAME_VCLASS_ANDA"
     SELENIUM_PASSWORD="PASSWORD_VCLASS_ANDA"
-    
+
     # (Opsional) Path ke chrome.exe jika tidak terdeteksi otomatis
     BROWSER_BINARY_LOCATION="C:/Program Files/Google/Chrome/Application/chrome.exe"
-    
+
     # (Opsional) Diperlukan jika ingin menjawab dengan AI
     GEMINI_API_KEY="API_KEY_GEMINI_ANDA"
-    GEMINI_MODEL="models/gemini-1.5-flash-latest" # atau 'models/gemini-pro'
+    GEMINI_MODEL="gemini-pro"
     ```
 
 4.  **Jalankan Skrip**
 
-    -   **Dry Run (Mode Default untuk Tes Konfigurasi):**
-        Jalankan tanpa argumen untuk memeriksa login dan API key.
-        ```bash
-        python main.py
-        ```
+    - **Mode Interaktif (Penggunaan Utama):**
+      Jalankan skrip tanpa argumen. Anda akan diminta untuk memasukkan URL kuis.
 
-    -   **Scrape & Jawab Otomatis dengan AI:**
-        Gunakan flag `--url` diikuti dengan URL kuis.
-        ```bash
-        python main.py --url "https://v-class.gunadarma.ac.id/mod/quiz/view.php?id=xxxxxx"
-        ```
+      ```bash
+      python main.py
+      ```
 
-    -   **Hanya Scrape (Tanpa Menjawab):**
-        Tambahkan flag `--scrape-only`.
-        ```bash
-        python main.py --url "https://v-class.gunadarma.ac.id/mod/quiz/view.php?id=xxxxxx" --scrape-only
-        ```
+    - **Mode Non-Interaktif (Untuk Otomasi/Scripting):**
+      Gunakan _flag_ `--url` untuk menjalankan proses penuh secara otomatis.
+
+      ```bash
+      python main.py --url "https://v-class.gunadarma.ac.id/mod/quiz/view.php?id=xxxxxx"
+      ```
+
+    - **Menggunakan File Kunci Jawaban (Sharing):**
+      Gunakan _flag_ `--answer-file` untuk mengisi jawaban dari file JSON yang sudah ada.
+
+      ```bash
+      python main.py --url "https://v-class.gunadarma.ac.id/mod/quiz/view.php?id=xxxxxx" --answer-file "path/ke/file_jawaban.json"
+      ```
+
+    - **Opsi Tambahan:**
+      - `--scrape-only`: Hanya mengambil pertanyaan, tidak menjawab.
+      - `--no-cache`: Memaksa scraping baru dan mengabaikan cache.
+      - `--dry-run`: Menjalankan tes koneksi untuk login dan API, lalu keluar.
 
 ---
 
 ## 📁 Struktur Proyek
+
 ```
 lazy-quiz/
 ├── .env # File konfigurasi (kredensial, API key)
 ├── main.py # Skrip utama untuk menjalankan program
 ├── requirements.txt # Daftar dependensi Python
 ├── utils/ # Modul-modul pembantu
-│ ├── init.py
 │ ├── quiz_scraper.py # Kelas utama untuk logika scraping dan interaksi browser
 │ └── ai_utils.py # Fungsi-fungsi untuk berinteraksi dengan Gemini API
-└── output/ # Folder tempat hasil scrape disimpan
-└── Nama_Kuis_YYYY-MM-DD_HH-MM-SS/
-├── scraped_questions.json
-└── ai_answers.json
+├── cache/ # Folder tempat data pertanyaan yang sudah di-scrape disimpan
+└── output/ # Folder tempat hasil (misal: file jawaban) disimpan
 ```
 
 ## 📜 Lisensi
 
-Didistribusikan di bawah Lisensi MIT. Lihat `LICENSE` untuk informasi lebih lanjut.
+Proyek ini didistribusikan di bawah Lisensi MIT. Lihat file `LICENSE` untuk informasi lebih lanjut.
