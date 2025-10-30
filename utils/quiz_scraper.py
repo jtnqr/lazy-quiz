@@ -31,7 +31,9 @@ def _clean_html_for_prompt(html: Optional[str]) -> str:
     if not html:
         return ""
     soup = BeautifulSoup(html, "html.parser")
-    return soup.get_text(separator=" ", strip=True)
+    text = soup.get_text(separator=" ", strip=True)
+    # Hapus label seperti "a. ", "b. ", dll. dari awal string.
+    return re.sub(r"^[a-z]\.\s+", "", text).strip()
 
 
 class QuizScraper:
