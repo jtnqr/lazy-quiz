@@ -138,17 +138,28 @@ class QuizScraper:
             return {}
         print(f"Menemukan {len(self.__quiz_addresses)} pertanyaan. Memulai scraping...")
         self.driver.get(self.__quiz_addresses[0])
+
+        question_anchor = (By.CSS_SELECTOR, _QUESTION_TEXT_SELECTOR)
+
         for i in range(len(self.__quiz_addresses)):
             q_num = i + 1
+            try:
+                self.wait.until(EC.presence_of_element_located(question_anchor))
+            except TimeoutException:
+                print(f"  - Error: Timeout saat menunggu halaman soal {q_num} dimuat.")
+                break
+
             print(f"  - Scraping pertanyaan {q_num}...")
             self.__quizzes[q_num] = self._fetch_current_page_quiz()
+
             if i < len(self.__quiz_addresses) - 1:
                 try:
-                    self.wait.until(
+                    next_button = self.wait.until(
                         EC.element_to_be_clickable(
                             (By.CSS_SELECTOR, _NEXT_PAGE_BUTTON_SELECTOR)
                         )
-                    ).click()
+                    )
+                    next_button.click()
                 except TimeoutException:
                     print(
                         f"  - Peringatan: Gagal menemukan tombol 'Next Page' setelah soal {q_num}."
@@ -159,7 +170,7 @@ class QuizScraper:
     def _fetch_current_page_quiz(self) -> Dict[str, Any]:
         try:
             q_element = self.wait.until(
-                EC.presence_of_element_located(
+                EC.visibility_of_element_located(
                     (By.CSS_SELECTOR, _QUESTION_TEXT_SELECTOR)
                 )
             )
@@ -186,25 +197,35 @@ class QuizScraper:
     def answer_quizzes(self, answers: Dict[str, str]):
         print("Memulai proses pengisian jawaban di halaman web...")
         self.driver.get(self.__quiz_addresses[0])
-        self.wait.until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, _QUESTION_TEXT_SELECTOR))
-        )
+
+        question_anchor = (By.CSS_SELECTOR, _QUESTION_TEXT_SELECTOR)
+
         for i in range(len(self.__quiz_addresses)):
             q_num = i + 1
             answer_text = answers.get(str(q_num))
+
+            try:
+                self.wait.until(EC.presence_of_element_located(question_anchor))
+            except TimeoutException:
+                print(f"  - Error: Timeout saat menunggu halaman soal {q_num} dimuat.")
+                break
+
             if answer_text:
                 print(f"  - Mengisi jawaban untuk pertanyaan {q_num}...")
                 self._answer_current_page_quiz(answer_text)
+
             if i < len(self.__quiz_addresses) - 1:
                 try:
-                    self.wait.until(
+                    next_button = self.wait.until(
                         EC.element_to_be_clickable(
                             (By.CSS_SELECTOR, _NEXT_PAGE_BUTTON_SELECTOR)
                         )
-                    ).click()
+                    )
+                    next_button.click()
                 except TimeoutException:
                     print("  - Tidak bisa menemukan tombol 'Next Page'.")
                     break
+
         try:
             self.wait.until(
                 EC.element_to_be_clickable(
