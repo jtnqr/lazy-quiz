@@ -3,15 +3,10 @@
 import argparse
 import json
 import os
-import re
 import sys
-import time
 from datetime import datetime
 
 from dotenv import load_dotenv
-from selenium import webdriver
-from selenium.common.exceptions import WebDriverException
-from selenium.webdriver.chrome.options import Options
 
 import utils.ai_utils as ai
 from utils.quiz_scraper import QuizScraper
@@ -19,25 +14,18 @@ from utils.quiz_scraper import QuizScraper
 CACHE_DIR = "cache"
 
 
-def handle_dry_run(username, password, binary_location, gemini_api_key, gemini_model):
-    print("--- Starting Dry Run ---")
+def handle_dry_run(username, password, gemini_api_key, gemini_model):
+    print("--- Starting Dry Run (HTTP Mode) ---")
+
     print("\n--- Testing Moodle Login ---")
-    driver = None
     try:
-        options = Options()
-        options.add_argument("--headless")
-        options.add_experimental_option("excludeSwitches", ["enable-logging"])
-        if binary_location:
-            options.binary_location = binary_location
-        driver = webdriver.Chrome(options=options)
-        QuizScraper(driver, "https://v-class.gunadarma.ac.id/my/", username, password)
+        # Gunakan string kosong untuk tes login saja tanpa akses kuis
+        QuizScraper("", username, password)
         print("Moodle Login Check: SUCCESS")
     except Exception as e:
         print("Moodle Login Check: FAILED")
         print(f"  > Error Message: {e}")
-    finally:
-        if driver:
-            driver.quit()
+
     if gemini_api_key:
         ai.test_gemini_api(gemini_api_key, gemini_model)
     else:
@@ -47,33 +35,16 @@ def handle_dry_run(username, password, binary_location, gemini_api_key, gemini_m
 
 
 def run_quiz_process(
-    quiz_url: str,
-    args,
-    username,
-    password,
-    binary_location,
-    gemini_api_key,
-    gemini_model,
+    quiz_url: str, args, username, password, gemini_api_key, gemini_model
 ):
-    driver = None
-    is_successful = False
     try:
-        options = Options()
-        options.add_argument("--start-maximized")
-        options.add_experimental_option("excludeSwitches", ["enable-logging"])
-        if binary_location:
-            options.binary_location = binary_location
-        driver = webdriver.Chrome(options=options)
-
-        try:
-            qz = QuizScraper(driver, quiz_url, username, password)
-        except ValueError as e:
-            print(f"\nError: Inisialisasi scraper gagal. {e}")
-            sys.exit(1)
+        # Inisialisasi Scraper
+        qz = QuizScraper(quiz_url, username, password)
 
         qz_title = qz.get_sanitized_title()
         quiz_id = qz.quiz_id
 
+        # Penamaan File Cache
         cache_filename = (
             f"{qz_title}_{quiz_id}_questions.json"
             if quiz_id
@@ -82,31 +53,36 @@ def run_quiz_process(
         cache_file = os.path.join(CACHE_DIR, cache_filename)
 
         answers_to_fill = {}
+        shareable_path = None
 
+        # 1. LOGIKA LOAD JAWABAN (Manual File / AI)
         if args.answer_file:
             print(f"Mode Kunci Jawaban: Memuat jawaban dari '{args.answer_file}'...")
             with open(args.answer_file, "r") as f:
                 loaded_answers = json.load(f)
+            # Normalisasi format json
             for num, data in loaded_answers.items():
-                answers_to_fill[num] = list(data.values())[0]
+                val = data if isinstance(data, str) else list(data.values())[0]
+                answers_to_fill[num] = val
         else:
             os.makedirs(CACHE_DIR, exist_ok=True)
             qz_quizzes = None
+
+            # Cek Cache Lokal
             if os.path.exists(cache_file) and not args.no_cache:
                 print(f"Cache ditemukan! Memuat pertanyaan dari '{cache_file}'...")
                 with open(cache_file, "r") as f:
                     qz_quizzes = json.load(f)
+
+                qz.set_quiz_data(qz_quizzes)
             else:
-                print(
-                    "Cache tidak ditemukan atau --no-cache digunakan. Memulai scraping baru..."
-                )
+                print("Cache tidak tersedia/diabaikan. Memulai scraping baru...")
                 qz_quizzes = qz.fetch_all_quizzes()
                 with open(cache_file, "w") as f:
                     json.dump(qz_quizzes, f, indent=2)
-                print(
-                    f"Pertanyaan berhasil di-scrape dan disimpan ke cache: '{cache_file}'"
-                )
+                print(f"Pertanyaan disimpan ke cache: '{cache_file}'")
 
+            # Persiapan Data untuk AI
             questions_for_ai = {}
             skipped_questions = []
             for num, data in qz_quizzes.items():
@@ -120,168 +96,129 @@ def run_quiz_process(
 
             if skipped_questions:
                 print(
-                    f"\nPeringatan: Soal nomor {', '.join(map(str, skipped_questions))} dilewati karena mengandung gambar."
+                    f"\nPeringatan: Soal {skipped_questions} dilewati (mengandung gambar)."
                 )
 
+            # Panggil AI
             if not args.scrape_only and gemini_api_key and questions_for_ai:
                 answers_from_ai = ai.get_gemini_answers(
                     questions_for_ai, gemini_api_key, gemini_model
                 )
+
                 if answers_from_ai:
+                    # Simpan Hasil AI
                     run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                    output_dir_name = (
-                        f"{qz_title}_{quiz_id}_{run_timestamp}"
-                        if quiz_id
-                        else f"{qz_title}_{run_timestamp}"
-                    )
-                    output_dir = os.path.join("output", output_dir_name)
+                    output_dir = os.path.join("output", f"{qz_title}_{run_timestamp}")
                     os.makedirs(output_dir, exist_ok=True)
 
                     shareable_answers = {}
                     for num_str, answer_text in answers_from_ai.items():
-                        question_text = questions_for_ai[int(num_str)]["question_text"]
-                        shareable_answers[num_str] = {question_text: answer_text}
+                        q_text = questions_for_ai[int(num_str)]["question_text"]
+                        shareable_answers[num_str] = {q_text: answer_text}
 
-                    shareable_filename = (
-                        f"{qz_title}_{quiz_id}_SHAREABLE_ANSWERS.json"
-                        if quiz_id
-                        else f"{qz_title}_SHAREABLE_ANSWERS.json"
-                    )
-                    shareable_file_path = os.path.join(output_dir, shareable_filename)
-                    with open(shareable_file_path, "w") as f:
+                    shareable_path = os.path.join(output_dir, "SHAREABLE_ANSWERS.json")
+                    with open(shareable_path, "w") as f:
                         json.dump(shareable_answers, f, indent=2)
-                    print(
-                        f"Kunci Jawaban yang bisa dibagikan disimpan di: '{shareable_file_path}'"
-                    )
+
+                    print(f"Kunci Jawaban disimpan di: '{shareable_path}'")
                     answers_to_fill = answers_from_ai
                 else:
                     print("Gagal mendapatkan jawaban dari AI.")
             elif args.scrape_only:
-                print("\nMode --scrape-only. Proses selesai.")
-                is_successful = True
-            elif not questions_for_ai:
-                print("\nTidak ada pertanyaan berbasis teks yang bisa dijawab oleh AI.")
-                is_successful = True
-            else:
-                print("\nAPI key Gemini tidak ditemukan.")
-                is_successful = True
+                print("\nMode --scrape-only. Selesai.")
+                return
 
+        # 2. LOGIKA KONFIRMASI & PENGISIAN JAWABAN
         if answers_to_fill:
-            qz.answer_quizzes(answers_to_fill)
-            is_successful = True
-            print(
-                "\n--------------------------------------------------------------------"
-            )
-            print("Semua jawaban telah terisi. Anda dapat meninjau jawaban di browser.")
-            print(
-                "Skrip akan berhenti secara otomatis setelah Anda menutup jendela browser."
-            )
-            print(
-                "--------------------------------------------------------------------"
-            )
-            while True:
-                try:
-                    if not driver.window_handles:
-                        print("\nBrowser ditutup oleh pengguna. Skrip selesai.")
-                        break
-                    time.sleep(1)
-                except (WebDriverException, ConnectionRefusedError):
-                    print("\nKoneksi ke browser terputus. Skrip selesai.")
-                    break
-        else:
-            if not args.scrape_only:
-                print("Tidak ada jawaban untuk diisi. Proses selesai.")
-                is_successful = True
-    except Exception:
-        exc_type, exc_obj, exc_tb = sys.exc_info()
-        fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-        print("\n--- TERJADI ERROR TAK TERDUGA ---")
-        print(f"  - Tipe: {exc_type.__name__}")
-        print(f"  - File: {fname} (Baris: {exc_tb.tb_lineno})")
-        print(f"  - Pesan: {str(exc_obj)}")
-    finally:
-        if driver and not is_successful:
-            print("Menutup WebDriver karena proses tidak selesai atau terjadi error...")
-            driver.quit()
+            current_attempt_url = qz.attempt_url if qz.attempt_url else quiz_url
+
+            # 1. SELALU ISI JAWABAN (SAVE STATE)
+            print("\n" + "=" * 60)
+            print("MENGISI JAWABAN KE MOODLE (AUTO-FILL)...")
+            print("=" * 60)
+            qz.save_answers(answers_to_fill)
+            print("\n✅ Jawaban telah terisi dan tersimpan di server.")
+            print("   (Jika Anda membuka browser, jawaban sudah terpilih/Saved)")
+
+            # 2. CEK AUTO SUBMIT
+            if args.auto_submit:
+                print("\n[Mode Auto-Submit] Melakukan Final Submit...")
+                qz.submit_final()
+            else:
+                # 3. KONFIRMASI FINAL SUBMIT
+                print("\n" + "-" * 60)
+                print("KONFIRMASI FINAL SUBMIT")
+                print("-" * 60)
+                print(f"URL Kuis : {current_attempt_url}")
+                print(
+                    "Jawaban sudah diisi. Anda bisa merefresh browser untuk mengeceknya."
+                )
+                print(
+                    "Apakah Anda ingin bot melakukan 'Submit all and finish' sekarang?"
+                )
+
+                choice = input("\nSubmit Kuis Sekarang? (y/N): ").strip().lower()
+                if choice in ["y", "yes", "ya"]:
+                    qz.submit_final()
+                else:
+                    print("\nOke. Kuis belum disubmit (tapi jawaban sudah tersimpan).")
+                    print("Silakan buka browser dan submit manual jika sudah yakin.")
+
+    except Exception as e:
+        print("\n--- TERJADI ERROR ---")
+        print(f"Message: {e}")
+        import traceback
+
+        traceback.print_exc()
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="A script to scrape and/or answer Moodle quizzes."
-    )
+    parser = argparse.ArgumentParser(description="Moodle Quiz Bot (Requests Version)")
+    parser.add_argument("--url", help="URL kuis Moodle")
+    parser.add_argument("--answer-file", help="Path file JSON jawaban")
     parser.add_argument(
-        "--url", help="URL kuis untuk menjalankan dalam mode non-interaktif."
+        "--scrape-only", action="store_true", help="Hanya scrape, jangan jawab"
     )
+    parser.add_argument("--no-cache", action="store_true", help="Abaikan cache lokal")
     parser.add_argument(
-        "--answer-file",
-        help="Path ke file JSON kunci jawaban untuk langsung mengisi kuis.",
-    )
-    parser.add_argument(
-        "--scrape-only",
+        "--auto-submit",
         action="store_true",
-        help="Hanya scrape pertanyaan; jangan jawab.",
+        help="Langsung submit jawaban tanpa konfirmasi user",
     )
-    parser.add_argument(
-        "--no-cache",
-        action="store_true",
-        help="Paksa scrape baru dan abaikan data cache.",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Jalankan tes koneksi dan kredensial, lalu keluar.",
-    )
+    parser.add_argument("--dry-run", action="store_true", help="Tes koneksi login & AI")
     args = parser.parse_args()
 
     load_dotenv()
     username = os.environ.get("SELENIUM_USERNAME")
     password = os.environ.get("SELENIUM_PASSWORD")
-    binary_location = os.environ.get("BROWSER_BINARY_LOCATION")
     gemini_api_key = os.environ.get("GEMINI_API_KEY")
     gemini_model = os.environ.get("GEMINI_MODEL", "gemini-pro")
 
     if not all([username, password]):
-        print("Error: Pastikan SELENIUM_USERNAME dan SELENIUM_PASSWORD ada di .env.")
+        print("Error: Pastikan Username & Password ada di .env")
         sys.exit(1)
 
     if args.dry_run:
-        handle_dry_run(
-            username, password, binary_location, gemini_api_key, gemini_model
-        )
+        handle_dry_run(username, password, gemini_api_key, gemini_model)
     elif args.url or args.answer_file:
-        quiz_url = args.url if args.url else "https://v-class.gunadarma.ac.id/my/"
-        run_quiz_process(
-            quiz_url,
-            args,
-            username,
-            password,
-            binary_location,
-            gemini_api_key,
-            gemini_model,
-        )
+        url = args.url if args.url else "https://v-class.gunadarma.ac.id/my/"
+        run_quiz_process(url, args, username, password, gemini_api_key, gemini_model)
     else:
         print("--- Mode Interaktif ---")
         while True:
-            raw_url = input("Silakan masukkan URL kuis: ")
-            cleaned_url = raw_url.strip()
-            if re.match(
-                r"^https://v-class\.gunadarma\.ac\.id/mod/quiz/view\.php\?id=\d+$",
-                cleaned_url,
-            ):
+            raw_url = input("Masukkan URL Kuis: ")
+            if "view.php" in raw_url or "attempt.php" in raw_url:
                 run_quiz_process(
-                    cleaned_url,
+                    raw_url.strip(),
                     args,
                     username,
                     password,
-                    binary_location,
                     gemini_api_key,
                     gemini_model,
                 )
                 break
             else:
-                print(
-                    "URL tidak valid. Harap masukkan URL yang benar, contoh: 'https://v-class.gunadarma.ac.id/mod/quiz/view.php?id=...'"
-                )
+                print("URL tidak valid. Harus mengandung 'view.php' atau 'attempt.php'")
 
 
 if __name__ == "__main__":
