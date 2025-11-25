@@ -1,16 +1,19 @@
-# Lazy Quiz - Bot Otomatis untuk Kuis Moodle
+# Lazy Quiz v2.0 - Bot Otomatis Kuis Moodle (HTTP Version)
 
 ## Pendahuluan
 
-**Lazy Quiz** adalah sebuah skrip Python yang dirancang untuk mengotomatiskan proses pengerjaan kuis di platform e-learning Moodle. Proyek ini menggunakan Selenium untuk interaksi dengan browser dan terintegrasi dengan Google Gemini API untuk menjawab pertanyaan berbasis teks secara otomatis.
+**Lazy Quiz** adalah skrip Python cerdas yang dirancang untuk mengotomatiskan pengerjaan kuis di platform e-learning Moodle.
 
-Proyek ini dibuat sebagai studi kasus untuk eksplorasi dan pembelajaran dalam bidang:
+🚀 **Pembaruan Versi 2.0:**
+Proyek ini telah mengalami **refactoring total**. Tidak lagi menggunakan Selenium (Browser Automation) yang berat, versi ini beralih menggunakan **`requests` dan `BeautifulSoup`** (HTTP Protocol Automation).
 
-- Automasi Web dengan Selenium.
-- Web Scraping dengan BeautifulSoup.
-- Integrasi API dengan model AI generatif (Google Gemini).
-- Desain Command-Line Interface (CLI) yang ramah pengguna.
-- Praktik terbaik dalam pengembangan perangkat lunak (konfigurasi, struktur proyek, penanganan error).
+**Apa bedanya dengan versi lama?**
+
+- **Sangat Ringan & Cepat:** Tidak perlu membuka browser Chrome. Memproses kuis dalam hitungan detik.
+- **Headless Ready:** Bisa berjalan di server Linux (VPS), Terminal, atau bahkan **Termux (Android)**.
+- **Lebih Stabil:** Menggunakan manajemen sesi HTTP native, meminimalisir error akibat loading page yang lambat.
+
+Proyek ini tetap terintegrasi dengan **Google Gemini AI** untuk menganalisis dan menjawab pertanyaan secara otomatis.
 
 ---
 
@@ -24,25 +27,25 @@ Proyek ini dibuat sebagai studi kasus untuk eksplorasi dan pembelajaran dalam bi
 
 ---
 
-## ✨ Fitur
+## ✨ Fitur Baru (v2.0)
 
-- **Login Otomatis:** Skrip akan melakukan login ke akun Moodle Anda setiap kali dijalankan.
-- **Alur Kuis Otomatis:** Mampu menangani seluruh alur kuis, mulai dari mengklik "Attempt quiz", "Continue last attempt", menangani popup konfirmasi, hingga menavigasi antar soal.
-- **Scraping Cerdas:** Mampu mengambil semua pertanyaan dan pilihan jawaban, serta mendeteksi soal yang berisi gambar untuk dilewati.
-- **Menjawab dengan AI:** Terintegrasi dengan Google Gemini API untuk menganalisis pertanyaan dan memilih jawaban yang paling relevan.
-- **Mode Eksekusi Ganda:**
-  - **Mode Interaktif:** Jalankan skrip tanpa argumen dan Anda akan dipandu untuk memasukkan URL.
-  - **Mode Non-Interaktif:** Gunakan _flags_ seperti `--url` untuk menjalankan skrip sepenuhnya secara otomatis.
-- **Sistem Cache Cerdas:** Secara otomatis menyimpan pertanyaan yang sudah di-scrape ke _cache_. Pada eksekusi berikutnya untuk kuis yang sama, skrip akan melewatkan proses scraping yang lambat.
-- **Fitur Berbagi Jawaban:** Menghasilkan file "kunci jawaban" berformat JSON yang bisa dibagikan ke pengguna lain, memungkinkan mereka mengisi kuis secara otomatis tanpa perlu akses API.
+- **HTTP Session Management:** Login dan manajemen _cookies_ (MoodleSession) dilakukan secara otomatis di latar belakang tanpa browser.
+- **Auto-Fill & Save (Safe Mode):**
+  - Bot akan **mengisi dan menyimpan** jawaban ke server Moodle secara otomatis.
+  - **Human-in-the-loop:** Secara default, bot **TIDAK** akan melakukan _Final Submit_. Bot akan berhenti dan meminta konfirmasi Anda, memberi Anda kesempatan untuk memeriksa jawaban di browser sebelum disubmit.
+- **Auto-Submit:** Opsi argumen `--auto-submit` untuk Anda yang ingin bot langsung melakukan _Submit all and finish_ tanpa konfirmasi.
+- **Smart Scraping:** Mendeteksi navigasi halaman (pagination) dan melewati soal bergambar secara otomatis.
+- **Integrasi AI:** Menggunakan Google Gemini untuk menjawab soal pilihan ganda berbasis teks.
+- **Cache System:** Menyimpan soal yang sudah diambil agar tidak perlu _request_ ulang jika terjadi gangguan koneksi.
 
 ---
 
 ## ⚙️ Kebutuhan Sistem
 
-- Python 3.8 atau yang lebih baru.
-- Browser Google Chrome.
-- Dependensi Python yang tercantum di `requirements.txt`.
+- **Python 3.8** atau yang lebih baru.
+- Koneksi Internet.
+- Akun Google Gemini API (Gratis).
+- **TIDAK PERLU** Google Chrome atau WebDriver.
 
 ---
 
@@ -65,45 +68,42 @@ Proyek ini dibuat sebagai studi kasus untuk eksplorasi dan pembelajaran dalam bi
     Salin file `.env.example` menjadi `.env` dan isi dengan kredensial Anda.
 
     ```bash
-    # Ganti kredensial berikut dengan milik Anda
-    SELENIUM_USERNAME="USERNAME_VCLASS_ANDA"
-    SELENIUM_PASSWORD="PASSWORD_VCLASS_ANDA"
+    # Ganti kredensial berikut dengan akun Moodle/V-Class Anda
+    MOODLE_USERNAME="USERNAME_ANDA"
+    MOODLE_PASSWORD="PASSWORD_ANDA"
 
-    # (Opsional) Path ke chrome.exe jika tidak terdeteksi otomatis
-    BROWSER_BINARY_LOCATION="C:/Program Files/Google/Chrome/Application/chrome.exe"
-
-    # (Opsional) Diperlukan jika ingin menjawab dengan AI
-    GEMINI_API_KEY="API_KEY_GEMINI_ANDA"
+    # API Key Google Gemini (Wajib untuk fitur AI)
+    GEMINI_API_KEY="AIzaSy....."
     GEMINI_MODEL="gemini-pro"
     ```
 
 4.  **Jalankan Skrip**
 
-    - **Mode Interaktif (Penggunaan Utama):**
-      Jalankan skrip tanpa argumen. Anda akan diminta untuk memasukkan URL kuis.
+    - **Mode Interaktif (Rekomendasi):**
+      Jalankan tanpa argumen. Skrip akan meminta URL kuis, mengisi jawaban, lalu meminta konfirmasi sebelum submit.
 
       ```bash
       python main.py
       ```
 
-    - **Mode Non-Interaktif (Untuk Otomasi/Scripting):**
-      Gunakan _flag_ `--url` untuk menjalankan proses penuh secara otomatis.
+    - **Mode Non-Interaktif (Langsung URL):**
 
       ```bash
-      python main.py --url "https://v-class.gunadarma.ac.id/mod/quiz/view.php?id=xxxxxx"
+      python main.py --url "https://v-class.gunadarma.ac.id/mod/quiz/attempt.php?attempt=xxxxx"
       ```
 
-    - **Menggunakan File Kunci Jawaban (Sharing):**
-      Gunakan _flag_ `--answer-file` untuk mengisi jawaban dari file JSON yang sudah ada.
+    - **Mode Auto-Submit (Langsung Kumpul):**
+      Gunakan flag ini jika Anda ingin bot langsung melakukan _Submit all and finish_ tanpa konfirmasi.
 
       ```bash
-      python main.py --url "https://v-class.gunadarma.ac.id/mod/quiz/view.php?id=xxxxxx" --answer-file "path/ke/file_jawaban.json"
+      python main.py --url "..." --auto-submit
       ```
 
     - **Opsi Tambahan:**
-      - `--scrape-only`: Hanya mengambil pertanyaan, tidak menjawab.
-      - `--no-cache`: Memaksa scraping baru dan mengabaikan cache.
-      - `--dry-run`: Menjalankan tes koneksi untuk login dan API, lalu keluar.
+      - `--scrape-only`: Hanya mengambil soal dan simpan ke JSON (tidak menjawab/mengisi ke Moodle).
+      - `--answer-file "file.json"`: Mengisi kuis menggunakan jawaban dari file JSON lokal (tanpa AI).
+      - `--no-cache`: Paksa ambil ulang soal dari server.
+      - `--dry-run`: Tes login dan koneksi API tanpa mengakses kuis.
 
 ---
 
@@ -111,14 +111,14 @@ Proyek ini dibuat sebagai studi kasus untuk eksplorasi dan pembelajaran dalam bi
 
 ```
 lazy-quiz/
-├── .env # File konfigurasi (kredensial, API key)
-├── main.py # Skrip utama untuk menjalankan program
-├── requirements.txt # Daftar dependensi Python
-├── utils/ # Modul-modul pembantu
-│ ├── quiz_scraper.py # Kelas utama untuk logika scraping dan interaksi browser
-│ └── ai_utils.py # Fungsi-fungsi untuk berinteraksi dengan Gemini API
-├── cache/ # Folder tempat data pertanyaan yang sudah di-scrape disimpan
-└── output/ # Folder tempat hasil (misal: file jawaban) disimpan
+├── .env # Konfigurasi kredensial
+├── main.py # Entry point (CLI & Logic Controller)
+├── requirements.txt # Daftar library (requests, beautifulsoup4, google-generativeai)
+├── utils/
+│ ├── quiz_scraper.py # Core Logic: HTTP Requests, CSRF Handling, HTML Parsing
+│ └── ai_utils.py # Integrasi Gemini API
+├── cache/ # Penyimpanan sementara soal (JSON)
+└── output/ # Hasil jawaban (Shareable JSON)
 ```
 
 ## 📜 Lisensi

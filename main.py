@@ -189,13 +189,13 @@ def main():
     args = parser.parse_args()
 
     load_dotenv()
-    username = os.environ.get("SELENIUM_USERNAME")
-    password = os.environ.get("SELENIUM_PASSWORD")
+    username = os.environ.get("MOODLE_USERNAME")
+    password = os.environ.get("MOODLE_PASSWORD")
     gemini_api_key = os.environ.get("GEMINI_API_KEY")
-    gemini_model = os.environ.get("GEMINI_MODEL", "gemini-pro")
+    gemini_model = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 
     if not all([username, password]):
-        print("Error: Pastikan Username & Password ada di .env")
+        print("Error: Pastikan MOODLE_USERNAME dan MOODLE_PASSWORD ada di .env")
         sys.exit(1)
 
     if args.dry_run:
