@@ -52,78 +52,87 @@ def run_quiz_process(
         )
         cache_file = os.path.join(CACHE_DIR, cache_filename)
 
-        answers_to_fill = {}
-        shareable_path = None
+        answer_cache_filename = (
+            f"{qz_title}_{quiz_id}_answers.json"
+            if quiz_id
+            else f"{qz_title}_answers.json"
+        )
+        answer_cache_file = os.path.join(CACHE_DIR, answer_cache_filename)
 
-        # 1. LOGIKA LOAD JAWABAN (Manual File / AI)
+        answers_to_fill = {}
+
         if args.answer_file:
+            # CASE A: Load manual dari file user
             print(f"Mode Kunci Jawaban: Memuat jawaban dari '{args.answer_file}'...")
             with open(args.answer_file, "r") as f:
                 loaded_answers = json.load(f)
-            # Normalisasi format json
             for num, data in loaded_answers.items():
                 val = data if isinstance(data, str) else list(data.values())[0]
                 answers_to_fill[num] = val
+
         else:
+            # CASE B: Load Otomatis (Cache -> AI)
             os.makedirs(CACHE_DIR, exist_ok=True)
             qz_quizzes = None
 
-            # Cek Cache Lokal
+            # Load Soal
             if os.path.exists(cache_file) and not args.no_cache:
-                print(f"Cache ditemukan! Memuat pertanyaan dari '{cache_file}'...")
+                print(f"Cache Soal ditemukan! Memuat dari '{cache_file}'...")
                 with open(cache_file, "r") as f:
                     qz_quizzes = json.load(f)
-
                 qz.set_quiz_data(qz_quizzes)
             else:
-                print("Cache tidak tersedia/diabaikan. Memulai scraping baru...")
+                print("Memulai scraping baru...")
                 qz_quizzes = qz.fetch_all_quizzes()
                 with open(cache_file, "w") as f:
                     json.dump(qz_quizzes, f, indent=2)
-                print(f"Pertanyaan disimpan ke cache: '{cache_file}'")
 
-            # Persiapan Data untuk AI
-            questions_for_ai = {}
-            skipped_questions = []
-            for num, data in qz_quizzes.items():
-                if data.get("has_image", False):
-                    skipped_questions.append(int(num))
-                else:
-                    questions_for_ai[int(num)] = {
-                        "question_text": data["question_text"],
-                        "answers": data["answers"],
-                    }
+            # Siapkan data untuk AI
+            questions_for_ai = {
+                int(k): {"question_text": v["question_text"], "answers": v["answers"]}
+                for k, v in qz_quizzes.items()
+                if not v.get("has_image")
+            }
 
-            if skipped_questions:
-                print(
-                    f"\nPeringatan: Soal {skipped_questions} dilewati (mengandung gambar)."
-                )
+            # Cek Cache Jawaban Dulu
+            answers_from_ai = {}
+            if os.path.exists(answer_cache_file) and not args.no_cache:
+                print(f"Cache Jawaban ditemukan! Memuat dari '{answer_cache_file}'...")
+                with open(answer_cache_file, "r") as f:
+                    answers_from_ai = json.load(f)
 
-            # Panggil AI
-            if not args.scrape_only and gemini_api_key and questions_for_ai:
+            # Jika tidak ada cache jawaban, baru tanya AI
+            elif not args.scrape_only and gemini_api_key and questions_for_ai:
                 answers_from_ai = ai.get_gemini_answers(
                     questions_for_ai, gemini_api_key, gemini_model
                 )
-
+                # Simpan ke cache jawaban
                 if answers_from_ai:
-                    # Simpan Hasil AI
-                    run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                    output_dir = os.path.join("output", f"{qz_title}_{run_timestamp}")
-                    os.makedirs(output_dir, exist_ok=True)
+                    with open(answer_cache_file, "w") as f:
+                        json.dump(answers_from_ai, f, indent=2)
 
-                    shareable_answers = {}
-                    for num_str, answer_text in answers_from_ai.items():
-                        q_text = questions_for_ai[int(num_str)]["question_text"]
-                        shareable_answers[num_str] = {q_text: answer_text}
+            # Proses Output Akhir
+            if answers_from_ai:
+                # Simpan copy ke folder output dengan timestamp (untuk arsip)
+                run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                output_dir = os.path.join("output", f"{qz_title}_{run_timestamp}")
+                os.makedirs(output_dir, exist_ok=True)
 
-                    shareable_path = os.path.join(output_dir, "SHAREABLE_ANSWERS.json")
-                    with open(shareable_path, "w") as f:
-                        json.dump(shareable_answers, f, indent=2)
+                shareable_path = os.path.join(output_dir, "SHAREABLE_ANSWERS.json")
+                # Format cantik untuk manusia
+                readable_dump = {}
+                for k, v in answers_from_ai.items():
+                    q_txt = questions_for_ai.get(int(k), {}).get(
+                        "question_text", "Unknown"
+                    )
+                    readable_dump[k] = {q_txt: v}
 
-                    print(f"Kunci Jawaban disimpan di: '{shareable_path}'")
-                    answers_to_fill = answers_from_ai
-                else:
-                    print("Gagal mendapatkan jawaban dari AI.")
+                with open(shareable_path, "w") as f:
+                    json.dump(readable_dump, f, indent=2)
+                print(f"Kunci Jawaban (Arsip) disimpan di: '{shareable_path}'")
+
+                answers_to_fill = answers_from_ai
+
             elif args.scrape_only:
                 print("\nMode --scrape-only. Selesai.")
                 return

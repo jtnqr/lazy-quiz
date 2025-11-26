@@ -98,7 +98,7 @@ class QuizScraper:
                 self.sesskey = inp["value"]
 
     def _initialize_quiz_attempt(self, url: str):
-        """Masuk ke halaman kuis, klik 'Attempt now' atau 'Continue attempt'"""
+        """Masuk ke halaman kuis, klik 'Attempt now', handle konfirmasi, atau 'Continue attempt'"""
         print(f"Mengakses halaman kuis: {url}")
         resp = self.session.get(url)
         soup = BeautifulSoup(resp.content, "lxml")
@@ -107,16 +107,17 @@ class QuizScraper:
         if not self.sesskey:
             self._extract_sesskey_from_soup(soup)
 
-        # Cek tombol Continue
+        # Cek tombol Continue (Lanjut)
         continue_link = soup.find("a", href=re.compile(r"attempt\.php"))
-        # Cek tombol Start baru (form)
+
+        # Cek tombol Start baru (Form)
         start_form = soup.find("form", action=re.compile(r"startattempt\.php"))
 
         if continue_link:
             print("Melanjutkan attempt yang sudah ada...")
             self.attempt_url = continue_link["href"]
-            # Hit URL sekali untuk memastikan kita ada di dalam kuis
-            self.session.get(self.attempt_url)
+            self.session.get(self.attempt_url)  # Refresh halaman agar session update
+
         elif start_form:
             print("Memulai attempt baru...")
             action_url = start_form["action"]
@@ -125,21 +126,55 @@ class QuizScraper:
                 for inp in start_form.find_all("input", type="hidden")
             }
 
-            # Handle tombol submit khusus jika ada
+            # Handle tombol submit di halaman view
             submit_btn = start_form.find("button", type="submit")
             if submit_btn and submit_btn.get("name"):
                 data[submit_btn["name"]] = submit_btn.get("value", "")
 
-            # POST request untuk memulai kuis
+            # POST 1: Klik "Attempt quiz now"
             start_resp = self.session.post(action_url, data=data)
+
+            # --- [FIX UTAMA DISINI] ---
+            # Cek apakah kita tertahan di halaman konfirmasi (URL masih startattempt.php)
+            if "startattempt.php" in start_resp.url:
+                print("  > Menemukan halaman konfirmasi (Time Limit/Password)...")
+                soup_conf = BeautifulSoup(start_resp.content, "lxml")
+
+                # Cari form konfirmasi (biasanya id="moodle-dialogue-..." atau form generik ke startattempt.php)
+                conf_form = soup_conf.find(
+                    "form", action=re.compile(r"startattempt\.php")
+                )
+
+                if conf_form:
+                    # Ambil hidden fields lagi (sesskey, cmid, dll)
+                    conf_data = {
+                        inp["name"]: inp.get("value", "")
+                        for inp in conf_form.find_all("input", type="hidden")
+                    }
+
+                    # Cari tombol konfirmasi (biasanya id="id_submitbutton")
+                    conf_btn = conf_form.find(
+                        "button", id="id_submitbutton"
+                    ) or conf_form.find("input", id="id_submitbutton")
+
+                    if conf_btn and conf_btn.get("name"):
+                        conf_data[conf_btn["name"]] = conf_btn.get("value", 1)
+
+                    print("  > Mengirim konfirmasi 'Start attempt'...")
+                    start_resp = self.session.post(conf_form["action"], data=conf_data)
+
             self.attempt_url = start_resp.url
+
         elif "attempt.php" in resp.url:
             self.attempt_url = resp.url
         else:
-            # Mungkin user memberikan URL course, bukan URL kuis, atau kuis tertutup
             raise Exception(
                 "Tidak dapat masuk ke kuis. Pastikan URL benar dan kuis sedang aktif."
             )
+
+        # Final Check: Pastikan kita benar-benar di attempt.php
+        if "attempt.php" not in self.attempt_url:
+            raise Exception(f"Gagal memulai kuis. Terjebak di: {self.attempt_url}")
 
     def get_sanitized_title(self) -> str:
         return f"Quiz_{self.quiz_id}" if self.quiz_id else "Quiz_Unknown"
@@ -226,10 +261,18 @@ class QuizScraper:
     def save_answers(self, answers: Dict[str, str]):
         """
         Hanya mengirim jawaban ke Moodle (Save), tapi TIDAK melakukan Final Submit.
+        Versi Robust: Menangani spasi aneh dan case-insensitive matching.
         """
         print("Memulai pengisian jawaban ke server (Saving)...")
 
-        # Kelompokkan jawaban per URL halaman
+        # Helper untuk membersihkan string (hapus spasi ganda, lowercase, hapus titik di akhir)
+        def clean_str(text):
+            text = text.replace("\xa0", " ")  # Hapus Non-breaking space
+            text = (
+                re.sub(r"\s+", " ", text).strip().lower()
+            )  # Normalisasi spasi & lowercase
+            return text.rstrip(".")  # Hapus titik di akhir kalimat
+
         page_buckets = {}
         for q_num_str, ans_text in answers.items():
             q_num = int(q_num_str)
@@ -239,7 +282,6 @@ class QuizScraper:
                     page_buckets[p_url] = {}
                 page_buckets[p_url][q_num] = ans_text
 
-        # Proses save per halaman
         for page_url, q_map in page_buckets.items():
             print(f"  > Mengisi halaman: {page_url}")
 
@@ -248,7 +290,7 @@ class QuizScraper:
             form = soup.find("form", id="responseform")
 
             if not form:
-                print("    Error: Form tidak ditemukan.")
+                print("    [Error] Form tidak ditemukan di halaman ini.")
                 continue
 
             payload = {
@@ -259,20 +301,59 @@ class QuizScraper:
             payload["next"] = "Next page"
 
             count_filled = 0
+
             for q_num, ans_text in q_map.items():
                 target_div = None
-                cache_q_text = self.__quizzes[q_num]["question_text"][:30]
 
-                for q_div in soup.select(".que.multichoice"):
-                    curr_text = q_div.select_one(".qtext").get_text(" ", strip=True)
-                    if cache_q_text in curr_text:
+                # Ambil teks soal dari cache dan bersihkan
+                cache_q_text_raw = self.__quizzes[q_num]["question_text"]
+                # Ambil 30 karakter pertama yang sudah dibersihkan untuk kunci pencarian
+                search_key = clean_str(cache_q_text_raw)[:30]
+
+                # Cari div soal yang cocok
+                question_divs = soup.select(".que.multichoice")
+                if not question_divs:
+                    # Fallback untuk tipe soal lain (misal True/False)
+                    question_divs = soup.select(".que")
+
+                for q_div in question_divs:
+                    q_text_el = q_div.select_one(".qtext")
+                    if not q_text_el:
+                        continue
+
+                    curr_text_raw = q_text_el.get_text(" ", strip=True)
+                    # Hapus nomor soal (misal "10.")
+                    curr_text_clean = re.sub(r"^[0-9]+\.\s*", "", curr_text_raw)
+
+                    if search_key in clean_str(curr_text_clean):
                         target_div = q_div
                         break
 
                 if target_div:
-                    for opt in target_div.select(".answer div[class^='r']"):
+                    found_option = False
+                    options = target_div.select(".answer div[class^='r']")
+
+                    # Bersihkan jawaban AI
+                    ans_ai_clean = clean_str(ans_text)
+
+                    for opt in options:
                         label = opt.find("label")
-                        if label and ans_text in label.get_text(" ", strip=True):
+                        if not label:
+                            continue
+
+                        label_text_raw = label.get_text(" ", strip=True)
+                        # Hapus "a.", "b."
+                        label_text_clean = re.sub(r"^[a-z]\.\s*", "", label_text_raw)
+
+                        lbl_web_clean = clean_str(label_text_clean)
+
+                        # MATCHING LOGIC:
+                        # 1. Cek if "Jawaban AI" ada di dalam "Opsi Web" (Substring)
+                        # 2. Cek if "Opsi Web" ada di dalam "Jawaban AI" (Reverse Substring)
+                        if (
+                            ans_ai_clean in lbl_web_clean
+                            or lbl_web_clean in ans_ai_clean
+                        ):
                             radio = opt.find("input", type="radio")
                             if radio:
                                 payload[radio["name"]] = radio["value"]
@@ -282,10 +363,22 @@ class QuizScraper:
                                 )
                                 if seq_inp:
                                     payload[seq_inp["name"]] = seq_inp["value"]
+                                found_option = True
                                 count_filled += 1
                                 break
 
-            # Kirim request untuk menyimpan halaman ini
+                    if not found_option:
+                        print(f"    [Gagal] Soal {q_num}: Opsi jawaban tidak cocok.")
+                        print(f"      - AI: '{ans_text}'")
+                        print(
+                            f"      - Web (First 20 chars): {[clean_str(o.text)[:20] for o in options]}"
+                        )
+                else:
+                    print(
+                        f"    [Gagal] Soal {q_num}: Teks soal tidak ditemukan di HTML."
+                    )
+                    print(f"      - Cache (Cari): '{search_key}...'")
+
             self.session.post(form["action"], data=payload)
             print(f"    Berhasil menyimpan {count_filled} jawaban di halaman ini.")
 
