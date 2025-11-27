@@ -1,7 +1,7 @@
 # utils/quiz_scraper.py
 
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -258,20 +258,17 @@ class QuizScraper:
 
         return self.__quizzes
 
-    def save_answers(self, answers: Dict[str, str]):
+    def save_answers(self, answers: Dict[str, str]) -> List[int]:
         """
-        Hanya mengirim jawaban ke Moodle (Save), tapi TIDAK melakukan Final Submit.
-        Versi Robust: Menangani spasi aneh dan case-insensitive matching.
+        Mengirim jawaban ke Moodle (Save) dan mengembalikan list ID soal yang BERHASIL diisi.
         """
         print("Memulai pengisian jawaban ke server (Saving)...")
 
-        # Helper untuk membersihkan string (hapus spasi ganda, lowercase, hapus titik di akhir)
+        # Helper clean string
         def clean_str(text):
-            text = text.replace("\xa0", " ")  # Hapus Non-breaking space
-            text = (
-                re.sub(r"\s+", " ", text).strip().lower()
-            )  # Normalisasi spasi & lowercase
-            return text.rstrip(".")  # Hapus titik di akhir kalimat
+            text = text.replace("\xa0", " ")
+            text = re.sub(r"\s+", " ", text).strip().lower()
+            return text.rstrip(".")
 
         page_buckets = {}
         for q_num_str, ans_text in answers.items():
@@ -281,6 +278,9 @@ class QuizScraper:
                 if p_url not in page_buckets:
                     page_buckets[p_url] = {}
                 page_buckets[p_url][q_num] = ans_text
+
+        # List untuk menampung ID soal yang sukses diisi
+        successfully_filled = []
 
         for page_url, q_map in page_buckets.items():
             print(f"  > Mengisi halaman: {page_url}")
@@ -300,30 +300,24 @@ class QuizScraper:
             }
             payload["next"] = "Next page"
 
-            count_filled = 0
+            page_success_count = 0
 
             for q_num, ans_text in q_map.items():
                 target_div = None
-
-                # Ambil teks soal dari cache dan bersihkan
                 cache_q_text_raw = self.__quizzes[q_num]["question_text"]
-                # Ambil 30 karakter pertama yang sudah dibersihkan untuk kunci pencarian
                 search_key = clean_str(cache_q_text_raw)[:30]
 
-                # Cari div soal yang cocok
                 question_divs = soup.select(".que.multichoice")
                 if not question_divs:
-                    # Fallback untuk tipe soal lain (misal True/False)
                     question_divs = soup.select(".que")
 
                 for q_div in question_divs:
                     q_text_el = q_div.select_one(".qtext")
                     if not q_text_el:
                         continue
-
-                    curr_text_raw = q_text_el.get_text(" ", strip=True)
-                    # Hapus nomor soal (misal "10.")
-                    curr_text_clean = re.sub(r"^[0-9]+\.\s*", "", curr_text_raw)
+                    curr_text_clean = re.sub(
+                        r"^[0-9]+\.\s*", "", q_text_el.get_text(" ", strip=True)
+                    )
 
                     if search_key in clean_str(curr_text_clean):
                         target_div = q_div
@@ -332,24 +326,16 @@ class QuizScraper:
                 if target_div:
                     found_option = False
                     options = target_div.select(".answer div[class^='r']")
-
-                    # Bersihkan jawaban AI
                     ans_ai_clean = clean_str(ans_text)
 
                     for opt in options:
                         label = opt.find("label")
                         if not label:
                             continue
+                        lbl_web_clean = clean_str(
+                            re.sub(r"^[a-z]\.\s*", "", label.get_text(" ", strip=True))
+                        )
 
-                        label_text_raw = label.get_text(" ", strip=True)
-                        # Hapus "a.", "b."
-                        label_text_clean = re.sub(r"^[a-z]\.\s*", "", label_text_raw)
-
-                        lbl_web_clean = clean_str(label_text_clean)
-
-                        # MATCHING LOGIC:
-                        # 1. Cek if "Jawaban AI" ada di dalam "Opsi Web" (Substring)
-                        # 2. Cek if "Opsi Web" ada di dalam "Jawaban AI" (Reverse Substring)
                         if (
                             ans_ai_clean in lbl_web_clean
                             or lbl_web_clean in ans_ai_clean
@@ -363,24 +349,24 @@ class QuizScraper:
                                 )
                                 if seq_inp:
                                     payload[seq_inp["name"]] = seq_inp["value"]
+
+                                # TANDAI SUKSES
                                 found_option = True
-                                count_filled += 1
+                                successfully_filled.append(q_num)
+                                page_success_count += 1
                                 break
 
                     if not found_option:
-                        print(f"    [Gagal] Soal {q_num}: Opsi jawaban tidak cocok.")
-                        print(f"      - AI: '{ans_text}'")
                         print(
-                            f"      - Web (First 20 chars): {[clean_str(o.text)[:20] for o in options]}"
+                            f"    [Gagal Match] Soal {q_num}. AI: '{ans_text[:20]}...'"
                         )
                 else:
-                    print(
-                        f"    [Gagal] Soal {q_num}: Teks soal tidak ditemukan di HTML."
-                    )
-                    print(f"      - Cache (Cari): '{search_key}...'")
+                    print(f"    [Gagal HTML] Soal {q_num} tidak ditemukan di halaman.")
 
             self.session.post(form["action"], data=payload)
-            print(f"    Berhasil menyimpan {count_filled} jawaban di halaman ini.")
+            print(f"    Berhasil menyimpan {page_success_count} jawaban.")
+
+        return successfully_filled
 
     def submit_final(self):
         """

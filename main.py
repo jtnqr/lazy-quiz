@@ -60,7 +60,32 @@ def run_quiz_process(
         answer_cache_file = os.path.join(CACHE_DIR, answer_cache_filename)
 
         answers_to_fill = {}
+        # Inisialisasi skipped_questions di sini agar aman diakses nanti
+        skipped_questions = []
+        qz_quizzes = {}
 
+        # --- FASE 1: PERSIAPAN DATA SOAL (WAJIB ADA) ---
+        # Kita butuh data soal (Page URL mapping) meskipun pakai manual answer file
+        os.makedirs(CACHE_DIR, exist_ok=True)
+
+        if os.path.exists(cache_file) and not args.no_cache:
+            print(f"Cache Soal ditemukan! Memuat dari '{cache_file}'...")
+            with open(cache_file, "r") as f:
+                qz_quizzes = json.load(f)
+            # Inject data ke scraper agar tahu mapping halaman
+            qz.set_quiz_data(qz_quizzes)
+        else:
+            print("Memulai scraping baru (diperlukan untuk struktur kuis)...")
+            qz_quizzes = qz.fetch_all_quizzes()
+            with open(cache_file, "w") as f:
+                json.dump(qz_quizzes, f, indent=2)
+
+        # Isi skipped_questions berdasarkan data yang sudah diload
+        for num, data in qz_quizzes.items():
+            if data.get("has_image", False):
+                skipped_questions.append(int(num))
+
+        # --- FASE 2: LOAD JAWABAN (MANUAL / CACHE / AI) ---
         if args.answer_file:
             # CASE A: Load manual dari file user
             print(f"Mode Kunci Jawaban: Memuat jawaban dari '{args.answer_file}'...")
@@ -71,23 +96,9 @@ def run_quiz_process(
                 answers_to_fill[num] = val
 
         else:
-            # CASE B: Load Otomatis (Cache -> AI)
-            os.makedirs(CACHE_DIR, exist_ok=True)
-            qz_quizzes = None
+            # CASE B: Load Otomatis (Cache Jawaban -> AI)
 
-            # Load Soal
-            if os.path.exists(cache_file) and not args.no_cache:
-                print(f"Cache Soal ditemukan! Memuat dari '{cache_file}'...")
-                with open(cache_file, "r") as f:
-                    qz_quizzes = json.load(f)
-                qz.set_quiz_data(qz_quizzes)
-            else:
-                print("Memulai scraping baru...")
-                qz_quizzes = qz.fetch_all_quizzes()
-                with open(cache_file, "w") as f:
-                    json.dump(qz_quizzes, f, indent=2)
-
-            # Siapkan data untuk AI
+            # Siapkan data untuk AI (filter gambar)
             questions_for_ai = {
                 int(k): {"question_text": v["question_text"], "answers": v["answers"]}
                 for k, v in qz_quizzes.items()
@@ -111,15 +122,13 @@ def run_quiz_process(
                     with open(answer_cache_file, "w") as f:
                         json.dump(answers_from_ai, f, indent=2)
 
-            # Proses Output Akhir
+            # Proses Output Akhir (Arsip timestamp)
             if answers_from_ai:
-                # Simpan copy ke folder output dengan timestamp (untuk arsip)
                 run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 output_dir = os.path.join("output", f"{qz_title}_{run_timestamp}")
                 os.makedirs(output_dir, exist_ok=True)
 
                 shareable_path = os.path.join(output_dir, "SHAREABLE_ANSWERS.json")
-                # Format cantik untuk manusia
                 readable_dump = {}
                 for k, v in answers_from_ai.items():
                     q_txt = questions_for_ai.get(int(k), {}).get(
@@ -137,41 +146,104 @@ def run_quiz_process(
                 print("\nMode --scrape-only. Selesai.")
                 return
 
-        # 2. LOGIKA KONFIRMASI & PENGISIAN JAWABAN
+        # --- FASE 3: PENGISIAN, LAPORAN, DAN KONFIRMASI ---
         if answers_to_fill:
             current_attempt_url = qz.attempt_url if qz.attempt_url else quiz_url
 
-            # 1. SELALU ISI JAWABAN (SAVE STATE)
             print("\n" + "=" * 60)
             print("MENGISI JAWABAN KE MOODLE (AUTO-FILL)...")
             print("=" * 60)
-            qz.save_answers(answers_to_fill)
-            print("\n✅ Jawaban telah terisi dan tersimpan di server.")
-            print("   (Jika Anda membuka browser, jawaban sudah terpilih/Saved)")
+
+            # Panggil fungsi save dan ambil list yang sukses
+            filled_ids = qz.save_answers(answers_to_fill)
+
+            # --- HITUNG STATISTIK ---
+            total_soal = len(qz_quizzes)
+            total_terisi = len(filled_ids)
+            total_gagal = total_soal - total_terisi
+
+            # Kategorisasi Gagal
+            failed_image_ids = skipped_questions  # Aman karena sudah di-init di atas
+            failed_matching_ids = []
+            failed_ai_ids = []
+
+            # Logic: Analisa kenapa soal gagal
+            for q_id in qz_quizzes.keys():
+                q_id = int(q_id)
+                if q_id in filled_ids:
+                    continue  # Sukses
+
+                if q_id in failed_image_ids:
+                    continue  # Memang di-skip karena gambar
+
+                if str(q_id) not in answers_to_fill:
+                    failed_ai_ids.append(q_id)  # AI tidak kasih jawaban
+                else:
+                    failed_matching_ids.append(q_id)  # AI kasih, tapi gagal match HTML
+
+            # --- TAMPILKAN LAPORAN ---
+            print("\n" + "-" * 60)
+            print("LAPORAN PENGISIAN JAWABAN")
+            print("-" * 60)
+            print(f"Total Soal      : {total_soal}")
+            print(f"Berhasil Diisi  : {total_terisi}")
+            print(f"Belum Diisi     : {total_gagal}")
+
+            if total_gagal > 0:
+                print("\n[Detail Kekurangan]")
+                if failed_image_ids:
+                    print(
+                        f"  - {len(failed_image_ids)} Soal mengandung GAMBAR (Dilewati)."
+                    )
+                if failed_ai_ids:
+                    print(
+                        f"  - {len(failed_ai_ids)} Soal tidak dijawab oleh AI (Error/Limit)."
+                    )
+                if failed_matching_ids:
+                    print(
+                        f"  - {len(failed_matching_ids)} Soal GAGAL dicocokkan dengan HTML (Bug/Mismatch)."
+                    )
+                    print(f"    ID Soal: {failed_matching_ids}")
 
             # 2. CEK AUTO SUBMIT
             if args.auto_submit:
                 print("\n[Mode Auto-Submit] Melakukan Final Submit...")
                 qz.submit_final()
             else:
-                # 3. KONFIRMASI FINAL SUBMIT
-                print("\n" + "-" * 60)
-                print("KONFIRMASI FINAL SUBMIT")
-                print("-" * 60)
-                print(f"URL Kuis : {current_attempt_url}")
-                print(
-                    "Jawaban sudah diisi. Anda bisa merefresh browser untuk mengeceknya."
-                )
-                print(
-                    "Apakah Anda ingin bot melakukan 'Submit all and finish' sekarang?"
-                )
+                # 3. KONFIRMASI FINAL SUBMIT CERDAS
+                print("\n" + "=" * 60)
 
-                choice = input("\nSubmit Kuis Sekarang? (y/N): ").strip().lower()
-                if choice in ["y", "yes", "ya"]:
+                # Tentukan Status Keamanan
+                is_safe = total_gagal == 0
+
+                if is_safe:
+                    print("STATUS: ✅ AMAN (100% TERISI)")
+                    print("Semua soal telah dijawab oleh bot.")
+                    prompt_text = "Submit Kuis Sekarang? (y/n): "
+                else:
+                    print("STATUS: ⚠️ PERINGATAN (ADA YANG KOSONG)")
+                    print(
+                        "Bot TIDAK menjawab semua soal. Sangat disarankan untuk mengecek manual!"
+                    )
+                    print(f"Silakan buka browser: {current_attempt_url}")
+                    prompt_text = "TETAP Paksa Submit? (ketik 'force' untuk ya, 'n' untuk batal): "
+
+                print("=" * 60)
+
+                choice = input(f"\n{prompt_text}").strip().lower()
+
+                if is_safe and choice in ["y", "yes", "ya"]:
+                    qz.submit_final()
+                elif not is_safe and choice == "force":
+                    print("Melakukan submit paksa atas permintaan user...")
                     qz.submit_final()
                 else:
-                    print("\nOke. Kuis belum disubmit (tapi jawaban sudah tersimpan).")
-                    print("Silakan buka browser dan submit manual jika sudah yakin.")
+                    print("\nOke. Kuis belum disubmit.")
+                    print("Jawaban yang berhasil diisi sudah tersimpan di server.")
+                    print("Silakan buka browser dan selesaikan manual.")
+
+        else:
+            print("Tidak ada jawaban untuk diisi.")
 
     except Exception as e:
         print("\n--- TERJADI ERROR ---")
