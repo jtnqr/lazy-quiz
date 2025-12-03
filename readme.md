@@ -123,4 +123,6 @@ lazy-quiz/
 
 ## 📜 Lisensi
 
-Proyek ini didistribusikan di bawah Lisensi MIT. Lihat file `LICENSE` untuk informasi lebih lanjut.
+Proyek ini dilindungi dan didistribusikan di bawah Lisensi **GNU General Public License v3.0 (GPLv3)**.
+
+Lihat file `LICENSE` untuk informasi lebih lanjut.
