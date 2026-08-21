@@ -14,6 +14,7 @@
 #  You should have received a copy of the GNU General Public License
 #  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import base64
 import json
 import re
 import time
@@ -22,13 +23,14 @@ from typing import Dict
 
 import google.generativeai as genai
 from google.api_core import exceptions
+from groq import Groq
 
 from utils.logger import logger
 
 
 class RateLimiter:
     """
-    Smart rate limiter for Gemini API.
+    Smart rate limiter for Gemini/Groq APIs.
     Tracks requests and only delays when needed.
     Uses exponential backoff on 429 errors.
     """
@@ -61,20 +63,26 @@ class RateLimiter:
     @staticmethod
     def backoff_retry(func, max_retries: int = 3):
         """
-        Execute function with exponential backoff on 429 errors.
+        Execute function with exponential backoff on 429/rate limit errors.
         Returns (success, result).
         """
         for attempt in range(max_retries):
             try:
                 result = func()
                 return True, result
-            except exceptions.ResourceExhausted:
-                # 429 Too Many Requests
-                wait_time = (2**attempt) * 5  # 5s, 10s, 20s
-                logger.warning(f"    Rate limited (429). Retry in {wait_time}s...")
-                time.sleep(wait_time)
             except Exception as e:
-                raise e
+                # Handle 429 errors from Google and Groq
+                is_rate_limit = False
+                error_str = str(e).lower()
+                if "429" in error_str or "resource_exhausted" in error_str or "rate_limit" in error_str:
+                    is_rate_limit = True
+
+                if is_rate_limit and attempt < max_retries - 1:
+                    wait_time = (2**attempt) * 5  # 5s, 10s, 20s
+                    logger.warning(f"    Rate limited. Retry in {wait_time}s... Error: {e}")
+                    time.sleep(wait_time)
+                else:
+                    raise e
         return False, None
 
 
@@ -82,20 +90,32 @@ class RateLimiter:
 _rate_limiter = RateLimiter()
 
 
-def solve_captcha_with_vision(image_data: bytes, api_key: str, model_name: str) -> str:
+def _encode_image_base64(image_bytes: bytes) -> str:
+    """Helper to encode image bytes to base64 string."""
+    return base64.b64encode(image_bytes).decode("utf-8")
+
+
+def solve_captcha_with_vision(image_data: bytes, api_key: str, model_name: str, provider: str = "gemini") -> str:
     """
-    Solve captcha using Gemini Vision.
+    Solve captcha using Gemini or Groq Vision.
 
     Args:
         image_data: Screenshot of captcha image as bytes (PNG)
-        api_key: Gemini API key
-        model_name: Gemini model name
+        api_key: LLM API key
+        model_name: LLM model name
+        provider: 'gemini' or 'groq'
 
     Returns:
         Captcha text, or empty string if failed
     """
-    import io
+    if provider.lower() == "groq":
+        return _solve_captcha_with_groq(image_data, api_key, model_name)
+    else:
+        return _solve_captcha_with_gemini(image_data, api_key, model_name)
 
+
+def _solve_captcha_with_gemini(image_data: bytes, api_key: str, model_name: str) -> str:
+    import io
     import PIL.Image
 
     genai.configure(api_key=api_key)
@@ -106,7 +126,6 @@ def solve_captcha_with_vision(image_data: bytes, api_key: str, model_name: str) 
         logger.error(f"Gemini API Error: Model '{model_name}' not found")
         return ""
 
-    # Convert bytes to PIL Image
     image = PIL.Image.open(io.BytesIO(image_data))
 
     prompt = (
@@ -118,7 +137,6 @@ def solve_captcha_with_vision(image_data: bytes, api_key: str, model_name: str) 
 
     try:
         _rate_limiter.wait_if_needed()
-
         logger.info("  > Solving captcha with Gemini Vision...")
 
         def make_request():
@@ -133,7 +151,64 @@ def solve_captcha_with_vision(image_data: bytes, api_key: str, model_name: str) 
         _rate_limiter.record_request()
 
         captcha_text = response.text.strip().upper()
-        # Clean up any extra characters
+        captcha_text = "".join(c for c in captcha_text if c.isalnum())
+
+        logger.info(f"  > Captcha solved: {captcha_text}")
+        return captcha_text
+
+    except Exception as e:
+        logger.error(f"  > Captcha solving error: {e}")
+        return ""
+
+
+def _solve_captcha_with_groq(image_data: bytes, api_key: str, model_name: str) -> str:
+    try:
+        client = Groq(api_key=api_key)
+    except Exception as e:
+        logger.error(f"Groq Client Init Error: {e}")
+        return ""
+
+    base64_image = _encode_image_base64(image_data)
+
+    prompt = (
+        "This is a captcha image. Read the text/characters in this captcha image. "
+        "Return ONLY the captcha text, no explanation, no extra characters. "
+        "The captcha is usually uppercase letters and/or numbers. "
+        "Example response: ABC123 or XYZW"
+    )
+
+    try:
+        _rate_limiter.wait_if_needed()
+        logger.info("  > Solving captcha with Groq Vision...")
+
+        def make_request():
+            return client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{base64_image}",
+                                },
+                            },
+                        ],
+                    }
+                ],
+                model=model_name,
+            )
+
+        success, response = _rate_limiter.backoff_retry(make_request)
+
+        if not success:
+            logger.error("  > Captcha solving failed after retries")
+            return ""
+
+        _rate_limiter.record_request()
+
+        captcha_text = response.choices[0].message.content.strip().upper()
         captcha_text = "".join(c for c in captcha_text if c.isalnum())
 
         logger.info(f"  > Captcha solved: {captcha_text}")
@@ -166,6 +241,14 @@ def _format_batch_prompt(quizzes: dict) -> str:
     return prompt
 
 
+def get_ai_answers(quizzes: dict, api_key: str, model_name: str, provider: str = "gemini") -> Dict[str, str]:
+    """Get batch answers from chosen AI provider (Gemini or Groq)."""
+    if provider.lower() == "groq":
+        return get_groq_answers(quizzes, api_key, model_name)
+    else:
+        return get_gemini_answers(quizzes, api_key, model_name)
+
+
 def get_gemini_answers(quizzes: dict, api_key: str, model_name: str) -> Dict[str, str]:
     genai.configure(api_key=api_key)
     try:
@@ -192,6 +275,61 @@ def get_gemini_answers(quizzes: dict, api_key: str, model_name: str) -> Dict[str
         return {}
 
 
+def get_groq_answers(quizzes: dict, api_key: str, model_name: str) -> Dict[str, str]:
+    try:
+        client = Groq(api_key=api_key)
+    except Exception as e:
+        logger.error(f"Groq Client Init Error: {e}")
+        return {}
+
+    logger.info("--- Menghubungi Groq API untuk semua jawaban (Mode Batch) ---")
+    batch_prompt = _format_batch_prompt(quizzes)
+
+    try:
+        logger.info(f"Mengirim {len(quizzes)} pertanyaan teks dalam satu permintaan...")
+        _rate_limiter.wait_if_needed()
+
+        def make_request():
+            return client.chat.completions.create(
+                messages=[
+                    {"role": "user", "content": batch_prompt}
+                ],
+                model=model_name,
+                response_format={"type": "json_object"},
+            )
+
+        success, response = _rate_limiter.backoff_retry(make_request)
+        if not success:
+            logger.error("  > Request to Groq failed after retries")
+            return {}
+
+        _rate_limiter.record_request()
+        content = response.choices[0].message.content
+
+        answers_from_ai = json.loads(content)
+        logger.info("Berhasil menerima dan mem-parsing semua jawaban dari Groq.")
+        return answers_from_ai
+    except (json.JSONDecodeError, Exception) as e:
+        logger.info(f"  > Terjadi error saat memproses respons dari AI: {e}")
+        return {}
+
+
+def get_ai_answer_for_image(
+    question_number: str,
+    question_text: str,
+    answers: list,
+    image_data: bytes,
+    api_key: str,
+    model_name: str,
+    provider: str = "gemini",
+) -> str:
+    """Get single image answer from chosen AI provider (Gemini or Groq)."""
+    if provider.lower() == "groq":
+        return get_groq_answer_for_image(question_number, question_text, answers, image_data, api_key, model_name)
+    else:
+        return get_gemini_answer_for_image(question_number, question_text, answers, image_data, api_key, model_name)
+
+
 def get_gemini_answer_for_image(
     question_number: str,
     question_text: str,
@@ -200,22 +338,7 @@ def get_gemini_answer_for_image(
     api_key: str,
     model_name: str,
 ) -> str:
-    """
-    Get answer for an image-based question using Gemini Vision.
-
-    Args:
-        question_number: Question number for logging
-        question_text: Any text associated with the question
-        answers: List of answer options
-        image_data: Screenshot of question as bytes (PNG)
-        api_key: Gemini API key
-        model_name: Gemini model name
-
-    Returns:
-        The selected answer text, or empty string if failed
-    """
     import io
-
     import PIL.Image
 
     genai.configure(api_key=api_key)
@@ -226,10 +349,8 @@ def get_gemini_answer_for_image(
         logger.error(f"Gemini API Error: Model '{model_name}' not found")
         return ""
 
-    # Convert bytes to PIL Image
     image = PIL.Image.open(io.BytesIO(image_data))
 
-    # Build prompt
     prompt = (
         "You are an expert at answering multiple choice questions. "
         "Look at this image carefully - it shows a question and/or answer options. "
@@ -249,12 +370,9 @@ def get_gemini_answer_for_image(
     prompt += "\nRespond with the correct answer option (letter + text if visible)."
 
     try:
-        # Smart rate limiting: only wait if approaching limit
         _rate_limiter.wait_if_needed()
-
         logger.info(f"  > [Image Q{question_number}] Sending to Gemini Vision...")
 
-        # Use backoff retry for 429 errors
         def make_request():
             return model.generate_content([prompt, image])
 
@@ -264,24 +382,107 @@ def get_gemini_answer_for_image(
             logger.error(f"  > [Image Q{question_number}] Failed after retries")
             return ""
 
-        # Record successful request
         _rate_limiter.record_request()
-
         answer = response.text.strip()
 
-        # Try to match with actual options
         for opt in answers:
             if answer.lower() in opt.lower() or opt.lower() in answer.lower():
                 logger.info(f"  > [Image Q{question_number}] Answer: {opt[:50]}...")
                 return opt
 
-        # If no match, return the raw response (might still work)
         logger.info(f"  > [Image Q{question_number}] Raw answer: {answer[:50]}...")
         return answer
 
     except Exception as e:
         logger.error(f"  > [Image Q{question_number}] Gemini Vision error: {e}")
         return ""
+
+
+def get_groq_answer_for_image(
+    question_number: str,
+    question_text: str,
+    answers: list,
+    image_data: bytes,
+    api_key: str,
+    model_name: str,
+) -> str:
+    try:
+        client = Groq(api_key=api_key)
+    except Exception as e:
+        logger.error(f"Groq Client Init Error: {e}")
+        return ""
+
+    base64_image = _encode_image_base64(image_data)
+
+    prompt = (
+        "You are an expert at answering multiple choice questions. "
+        "Look at this image carefully - it shows a question and/or answer options. "
+        "The answer options may be shown as text OR as images in the screenshot. "
+        "Identify the correct answer and return ONLY the letter/label of the correct option (e.g., 'a' or 'b' or 'c'). "
+        "If you can see the full answer text, include it after the letter.\n\n"
+    )
+
+    if question_text and question_text.strip():
+        prompt += f"Question context (if readable): {question_text}\n\n"
+
+    if answers:
+        prompt += "Known options (may or may not match image):\n"
+        for opt in answers:
+            prompt += f"- {opt}\n"
+
+    prompt += "\nRespond with the correct answer option (letter + text if visible)."
+
+    try:
+        _rate_limiter.wait_if_needed()
+        logger.info(f"  > [Image Q{question_number}] Sending to Groq Vision...")
+
+        def make_request():
+            return client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{base64_image}",
+                                },
+                            },
+                        ],
+                    }
+                ],
+                model=model_name,
+            )
+
+        success, response = _rate_limiter.backoff_retry(make_request)
+
+        if not success:
+            logger.error(f"  > [Image Q{question_number}] Failed after retries")
+            return ""
+
+        _rate_limiter.record_request()
+        answer = response.choices[0].message.content.strip()
+
+        for opt in answers:
+            if answer.lower() in opt.lower() or opt.lower() in answer.lower():
+                logger.info(f"  > [Image Q{question_number}] Answer: {opt[:50]}...")
+                return opt
+
+        logger.info(f"  > [Image Q{question_number}] Raw answer: {answer[:50]}...")
+        return answer
+
+    except Exception as e:
+        logger.error(f"  > [Image Q{question_number}] Groq Vision error: {e}")
+        return ""
+
+
+def test_ai_api(api_key: str, model_name: str, provider: str = "gemini") -> bool:
+    """Test connection to the chosen AI provider."""
+    if provider.lower() == "groq":
+        return test_groq_api(api_key, model_name)
+    else:
+        return test_gemini_api(api_key, model_name)
 
 
 def test_gemini_api(api_key: str, model_name: str) -> bool:
@@ -307,3 +508,26 @@ def test_gemini_api(api_key: str, model_name: str) -> bool:
     except Exception as e:
         logger.error(f"Gemini API Check: FAILED - Error: {e}")
         return False
+
+
+def test_groq_api(api_key: str, model_name: str) -> bool:
+    logger.info("\n--- Testing Groq API Connection ---")
+    try:
+        client = Groq(api_key=api_key)
+        response = client.chat.completions.create(
+            messages=[
+                {"role": "user", "content": "This is a test. Respond with the single word: OK"}
+            ],
+            model=model_name,
+        )
+        res_text = response.choices[0].message.content.strip()
+        if "OK" in res_text:
+            logger.info("Groq API Check: SUCCESS")
+            return True
+        else:
+            logger.info("Groq API Check: WARNING - Respons tidak terduga")
+            return True
+    except Exception as e:
+        logger.error(f"Groq API Check: FAILED - Error: {e}")
+        return False
+

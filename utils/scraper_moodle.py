@@ -11,9 +11,9 @@ from .scraper_base import BaseScraper
 
 
 class MoodleScraper(BaseScraper):
-    def __init__(self, url: str, username: str, password: str):
+    def __init__(self, url: str, username: str, password: str, no_session: bool = False):
         # Panggil init parent untuk setup Playwright & Browser
-        super().__init__(url, username, password)
+        super().__init__(url, username, password, no_session)
 
         # Extract base URL from user-provided URL
         from urllib.parse import urlparse
@@ -74,8 +74,19 @@ class MoodleScraper(BaseScraper):
         self.page.wait_for_load_state("domcontentloaded")
 
         # 1. Cek Tombol "Continue attempt" (Lanjut)
-        continue_btn = self.page.locator("button:has-text('Continue attempt')").or_(
-            self.page.locator("a:has-text('Continue attempt')")
+        continue_btn = (
+            self.page.locator("button:has-text('Continue attempt')")
+            .or_(self.page.locator("a:has-text('Continue attempt')"))
+            .or_(self.page.locator("button:has-text('Lanjutkan attempt')"))
+            .or_(self.page.locator("a:has-text('Lanjutkan attempt')"))
+        )
+
+        # 1b. Alternatif teks Continue attempt (Jika yang pertama tidak ditemukan)
+        continue_btn_alt = (
+            self.page.locator("button:has-text('Continue the last attempt')")
+            .or_(self.page.locator("a:has-text('Continue the last attempt')"))
+            .or_(self.page.locator("button:has-text('Lanjutkan attempt terakhir')"))
+            .or_(self.page.locator("a:has-text('Lanjutkan attempt terakhir')"))
         )
 
         # 2. Cek Tombol "Attempt quiz now" (Baru)
@@ -83,11 +94,17 @@ class MoodleScraper(BaseScraper):
             self.page.locator("input[value='Attempt quiz now']")
         )
 
+        clicked_continue = False
         if continue_btn.count() > 0 and continue_btn.first.is_visible():
             logger.info("Melanjutkan attempt yang sudah ada...")
             continue_btn.first.click()
             self.page.wait_for_load_state("domcontentloaded")
-
+            clicked_continue = True
+        elif continue_btn_alt.count() > 0 and continue_btn_alt.first.is_visible():
+            logger.info("Melanjutkan attempt yang sudah ada (alternatif)...")
+            continue_btn_alt.first.click()
+            self.page.wait_for_load_state("domcontentloaded")
+            clicked_continue = True
         elif attempt_btn.count() > 0 and attempt_btn.first.is_visible():
             logger.info("Memulai attempt baru...")
             attempt_btn.first.click()

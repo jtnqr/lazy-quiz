@@ -15,7 +15,7 @@ from utils.session_manager import SessionManager
 
 
 class BaseScraper(ABC):
-    def __init__(self, url: str, username: str, password: str):
+    def __init__(self, url: str, username: str, password: str, no_session: bool = False):
         self.url = url
         self.username = username
         self.password = password
@@ -44,11 +44,17 @@ class BaseScraper(ABC):
             ],
         )
 
+        # Load session only if not skipped
+        storage_state = None
+        if not no_session:
+            storage_state = self.session_manager.load_session(username)
+
         self.context: BrowserContext = self.browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             no_viewport=True,
             locale="id-ID",
             timezone_id="Asia/Jakarta",
+            storage_state=storage_state,
         )
 
         self.context.add_init_script("""

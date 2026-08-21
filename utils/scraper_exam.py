@@ -16,11 +16,13 @@ class ExamScraper(BaseScraper):
         url: str,
         username: str,
         password: str,
-        gemini_api_key: str = None,
-        gemini_model: str = None,
+        api_key: str = None,
+        model_name: str = None,
+        provider: str = "gemini",
+        no_session: bool = False,
     ):
         # Init parent
-        super().__init__(url, username, password)
+        super().__init__(url, username, password, no_session)
 
         # Extract base URL from user-provided URL
         from urllib.parse import urlparse
@@ -32,20 +34,21 @@ class ExamScraper(BaseScraper):
         self.current_block_questions = []
 
         try:
-            self.login(gemini_api_key, gemini_model)
+            self.login(api_key, model_name, provider)
         except Exception as e:
             logger.error(f"{e}")
             self.close()
             raise e
 
-    def login(self, gemini_api_key: str = None, gemini_model: str = None):
+    def login(self, api_key: str = None, model_name: str = None, provider: str = "gemini"):
         """
-        Automatic login with captcha solving using Gemini Vision.
+        Automatic login with captcha solving using Gemini/Groq Vision.
         Falls back to manual login if no API key provided.
 
         Args:
-            gemini_api_key: API key for Gemini Vision captcha solving
-            gemini_model: Gemini model to use
+            api_key: API key for vision captcha solving
+            model_name: Model to use
+            provider: 'gemini' or 'groq'
         """
         from utils.ai_utils import solve_captcha_with_vision
 
@@ -54,8 +57,8 @@ class ExamScraper(BaseScraper):
         self.page.wait_for_load_state("domcontentloaded")
 
         # Check if we can auto-solve captcha
-        if gemini_api_key and gemini_model:
-            logger.info("Auto-login mode: solving captcha with Gemini Vision...")
+        if api_key and model_name:
+            logger.info(f"Auto-login mode: solving captcha with {provider.capitalize()} Vision...")
 
             max_attempts = 3
             for attempt in range(max_attempts):
@@ -70,9 +73,9 @@ class ExamScraper(BaseScraper):
                 if captcha_img.is_visible():
                     captcha_data = captcha_img.screenshot()
 
-                    # Solve captcha with Gemini Vision
+                    # Solve captcha with Vision API
                     captcha_text = solve_captcha_with_vision(
-                        captcha_data, gemini_api_key, gemini_model
+                        captcha_data, api_key, model_name, provider
                     )
 
                     if captcha_text:

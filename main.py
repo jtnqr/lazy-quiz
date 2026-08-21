@@ -15,41 +15,64 @@ from utils.scraper_moodle import MoodleScraper
 
 # Create Typer app
 app = typer.Typer(
-    help="Lazy Quiz - Automated quiz solver for Moodle and ASP.NET platforms"
+    help="""
+Lazy Quiz - Automated quiz solver using Playwright and Gemini/Groq AI.
+
+Note: The 'run' command is executed by default if no command is specified.
+
+Quick Example:
+  uv run python main.py --url "<url>" --provider groq --auto-submit
+
+Use 'main.py run --help' to see all available options and flags for the runner.
+"""
 )
 
 CACHE_DIR = "cache"
 
 
-def get_available_models(api_key: str) -> list:
-    """Get list of available Gemini models that support text generation."""
-    try:
-        import google.generativeai as genai
+def get_available_models(api_key: str, provider: str = "gemini") -> list:
+    """Get list of available models for the given provider."""
+    if provider.lower() == "groq":
+        try:
+            from groq import Groq
+            client = Groq(api_key=api_key)
+            models = client.models.list()
+            return sorted([model.id for model in models.data])
+        except Exception as e:
+            logger.error(f"Failed to fetch Groq models: {e}")
+            return []
+    else:
+        try:
+            import google.generativeai as genai
 
-        genai.configure(api_key=api_key)
+            genai.configure(api_key=api_key)
 
-        models = []
-        for model in genai.list_models():
-            if "generateContent" in model.supported_generation_methods:
-                models.append(model.name)
-        return models
-    except Exception as e:
-        logger.error(f"Failed to fetch models: {e}")
-        return []
+            models = []
+            for model in genai.list_models():
+                if "generateContent" in model.supported_generation_methods:
+                    models.append(model.name)
+            return sorted(models)
+        except Exception as e:
+            logger.error(f"Failed to fetch Gemini models: {e}")
+            return []
 
 
-def prompt_model_selection(api_key: str) -> str:
-    """Prompt user to select a Gemini model if not configured."""
-    logger.info("GEMINI_MODEL not configured in .env")
+def prompt_model_selection(api_key: str, provider: str = "gemini") -> str:
+    """Prompt user to select a model if not configured."""
+    provider_name = "Groq" if provider.lower() == "groq" else "Gemini"
+    default_model = "llama-3.3-70b-versatile" if provider.lower() == "groq" else "gemini-flash-latest"
+    env_var_name = "GROQ_MODEL" if provider.lower() == "groq" else "GEMINI_MODEL"
+
+    logger.info(f"{env_var_name} not configured in .env")
     logger.info("Fetching available models...")
 
-    models = get_available_models(api_key)
+    models = get_available_models(api_key, provider)
 
     if not models:
-        logger.warning("No models found, using default: gemini-flash-latest")
-        return "gemini-flash-latest"
+        logger.warning(f"No models found, using default: {default_model}")
+        return default_model
 
-    logger.info("\nAvailable Gemini models:")
+    logger.info(f"\nAvailable {provider_name} models:")
     for i, model in enumerate(models, 1):
         logger.info(f"  {i}. {model}")
 
@@ -58,9 +81,8 @@ def prompt_model_selection(api_key: str) -> str:
         choice = typer.prompt("\nSelect model number (or press Enter for default)")
 
         if choice == "":
-            default = "gemini-flash-latest"
-            logger.info(f"Using default: {default}")
-            return default
+            logger.info(f"Using default: {default_model}")
+            return default_model
 
         try:
             idx = int(choice) - 1
@@ -84,18 +106,18 @@ def get_scraper_class(url: str):
         return MoodleScraper
 
 
-def run_quiz_process(url, args, username, password, gemini_api_key, gemini_model):
+def run_quiz_process(url, args, username, password, api_key, model, provider, vision_model, no_session: bool = False):
     qz = None
     try:
         # 1. Start Browser (Hanya sekali di awal)
         ScraperClass = get_scraper_class(url)
         logger.info(f"Initializing scraper: {ScraperClass.__name__}")
 
-        # ExamScraper needs Gemini credentials for auto-captcha solving
+        # ExamScraper needs credentials for auto-captcha solving
         if ScraperClass == ExamScraper:
-            qz = ScraperClass(url, username, password, gemini_api_key, gemini_model)
+            qz = ScraperClass(url, username, password, api_key, vision_model, provider, no_session)
         else:
-            qz = ScraperClass(url, username, password)
+            qz = ScraperClass(url, username, password, no_session)
 
         part_counter = 1  # Untuk penamaan file cache per bagian (Bagian 1, 2, dst)
 
@@ -170,37 +192,38 @@ def run_quiz_process(url, args, username, password, gemini_api_key, gemini_model
                 with open(answer_cache_file, "r") as f:
                     answers_from_ai = json.load(f)
             # Tanya AI
-            elif gemini_api_key and questions_for_ai:
-                answers_from_ai = ai.get_gemini_answers(
-                    questions_for_ai, gemini_api_key, gemini_model
+            elif api_key and questions_for_ai:
+                answers_from_ai = ai.get_ai_answers(
+                    questions_for_ai, api_key, model, provider
                 )
                 if answers_from_ai:
                     with open(answer_cache_file, "w") as f:
                         json.dump(answers_from_ai, f, indent=2)
 
-            # --- FASE 2b: IMAGE QUESTIONS (Gemini Vision) ---
+            # --- FASE 2b: IMAGE QUESTIONS (Vision) ---
             image_questions = {
                 k: v
                 for k, v in qz_quizzes.items()
                 if v.get("has_image") and v.get("image_data")
             }
 
-            if image_questions and gemini_api_key:
+            if image_questions and api_key:
                 logger.info(
-                    f"\\n>>> Processing {len(image_questions)} IMAGE questions with Gemini Vision <<<"
+                    f"\n>>> Processing {len(image_questions)} IMAGE questions with {provider.capitalize()} Vision <<<"
                 )
                 for q_num, q_data in image_questions.items():
                     # Skip if already have answer
                     if str(q_num) in answers_from_ai:
                         continue
 
-                    answer = ai.get_gemini_answer_for_image(
+                    answer = ai.get_ai_answer_for_image(
                         question_number=str(q_num),
                         question_text=q_data.get("question_text", ""),
                         answers=q_data.get("answers", []),
                         image_data=q_data["image_data"],
-                        api_key=gemini_api_key,
-                        model_name=gemini_model,
+                        api_key=api_key,
+                        model_name=vision_model,
+                        provider=provider,
                     )
 
                     if answer:
@@ -293,25 +316,46 @@ def run_command(
     answer_file: str = typer.Option(
         None, "--answer-file", help="Use answers from JSON file"
     ),
+    provider: str = typer.Option(
+        None, "--provider", help="AI provider to use (gemini/groq). Overrides LLM_PROVIDER in .env."
+    ),
+    no_session: bool = typer.Option(
+        False, "--no-session", help="Skip saved session, force fresh login"
+    ),
 ):
     """
     Run the quiz automation (default command).
 
-    Automatically solves quiz questions using Playwright and Gemini AI.
+    Automatically solves quiz questions using Playwright and Gemini / Groq AI.
     """
     load_dotenv()
     moodle_username = os.environ.get("MOODLE_USERNAME")
     moodle_password = os.environ.get("MOODLE_PASSWORD")
-    gemini_api_key = os.environ.get("GEMINI_API_KEY")
-    gemini_model = os.environ.get("GEMINI_MODEL", "").strip()
 
-    # If model not configured, prompt for selection
-    if not gemini_model and gemini_api_key:
-        gemini_model = prompt_model_selection(gemini_api_key)
-    elif not gemini_model:
-        # No API key, use default
-        gemini_model = "gemini-flash-latest"
-        logger.warning(f"Using default model: {gemini_model}")
+    # LLM Provider selection
+    if not provider:
+        provider = os.environ.get("LLM_PROVIDER", "gemini").strip().lower()
+    else:
+        provider = provider.strip().lower()
+
+    if provider == "groq":
+        api_key = os.environ.get("GROQ_API_KEY")
+        model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+        vision_model = os.environ.get("GROQ_VISION_MODEL", "llama-3.2-11b-vision-preview").strip()
+        if not api_key:
+            logger.error("GROQ_API_KEY not found in .env file.")
+    else:
+        provider = "gemini"
+        api_key = os.environ.get("GEMINI_API_KEY")
+        model = os.environ.get("GEMINI_MODEL", "").strip()
+        # If model not configured, prompt for selection
+        if not model and api_key:
+            model = prompt_model_selection(api_key, "gemini")
+        elif not model:
+            # No API key, use default
+            model = "gemini-flash-latest"
+            logger.warning(f"Using default model: {model}")
+        vision_model = model
 
     # Create args object for compatibility
     class Args:
@@ -330,8 +374,11 @@ def run_command(
             args,
             moodle_username,
             moodle_password,
-            gemini_api_key,
-            gemini_model,
+            api_key,
+            model,
+            provider,
+            vision_model,
+            no_session,
         )
     else:
         # Interactive mode
@@ -342,8 +389,11 @@ def run_command(
                 args,
                 moodle_username,
                 moodle_password,
-                gemini_api_key,
-                gemini_model,
+                api_key,
+                model,
+                provider,
+                vision_model,
+                no_session,
             )
 
 
@@ -365,23 +415,30 @@ def test_login(
 
 
 @app.command()
-def check_models():
-    """Check available Gemini AI models for your API key."""
-    # Import and run the check_models script
+def check_models(
+    provider: str = typer.Option(None, "--provider", help="Provider to check (gemini/groq)"),
+):
+    """Check available AI models for your API key (Gemini or Groq)."""
     import sys
-
+    import os
+    if provider:
+        os.environ["LLM_PROVIDER"] = provider
     sys.path.insert(0, "scripts")
+    if "check_models" in sys.modules:
+        import importlib
+        importlib.reload(sys.modules["check_models"])
+    else:
+        import check_models
 
 
 if __name__ == "__main__":
     # Make 'run' default if no command specified
     import sys
 
-    if len(sys.argv) == 1 or (
-        len(sys.argv) > 1
-        and not sys.argv[1].startswith("-")
-        and sys.argv[1] not in ["run", "test-login", "check-models"]
-    ):
+    commands = ["run", "test-login", "check-models"]
+    has_command = any(cmd in sys.argv for cmd in commands)
+
+    if not has_command and "--help" not in sys.argv and "-h" not in sys.argv:
         sys.argv.insert(1, "run")
 
     app()
